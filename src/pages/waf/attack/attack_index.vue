@@ -28,6 +28,7 @@
             <t-button theme="primary" :style="{ marginLeft: '8px' }" @click="getList('all')"> {{ $t('common.search') }} </t-button>
             <t-button type="reset" variant="base" theme="default"> {{ $t('common.reset') }}  </t-button>
             <t-button v-if="attackSearchformData.rule && attackSearchformData.rule !== ''" theme="danger" variant="outline" @click="handleDeleteTag"> {{ $t('common.delete') }} </t-button>
+            <t-button theme="danger" variant="outline" @click="handleBatchDeleteTag"> {{ $t('common.batch_delete.title') }} </t-button>
           </t-form-item>
         </t-form>
       </t-row>
@@ -59,6 +60,47 @@
         </t-table>
       </div>
     </t-card>
+
+    <t-dialog
+      :header="$t('page.attack_log.batch_delete_header')"
+      :visible.sync="batchDeleteVisible"
+      width="520px"
+      :confirmBtn="batchDeleteLoading ? { content: $t('common.batch_delete.deleting', { progress: batchDeleteProgress, total: batchDeleteTags.length }), loading: true, disabled: true } : { content: $t('common.batch_delete.confirm_btn'), theme: 'danger' }"
+      :cancelBtn="{ content: $t('common.cancel'), disabled: batchDeleteLoading }"
+      :closeOnEscKeydown="!batchDeleteLoading"
+      :closeOnOverlayClick="!batchDeleteLoading"
+      :onConfirm="confirmBatchDelete"
+      :onClose="() => { if (!batchDeleteLoading) batchDeleteVisible = false }"
+    >
+      <div style="padding: 8px 0;">
+        <t-alert theme="warning" :message="$t('common.batch_delete.warning')" style="margin-bottom: 16px;" />
+        <div style="margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-weight: 500;">{{ $t('page.attack_log.batch_delete_select_label') }}</span>
+            <div>
+              <t-link theme="primary" hover="color" size="small" @click="handleBatchSelectAll" style="margin-right: 8px;">{{ $t('common.batch_delete.select_all') }}</t-link>
+              <t-link theme="primary" hover="color" size="small" @click="handleBatchInvertSelection" style="margin-right: 8px;">{{ $t('common.batch_delete.invert_selection') }}</t-link>
+              <t-link theme="danger" hover="color" size="small" @click="handleBatchClearSelection">{{ $t('common.batch_delete.clear_selection') }}</t-link>
+            </div>
+          </div>
+          <t-select
+            v-model="batchDeleteTags"
+            :options="attackTagsForBatch"
+            multiple
+            :style="{ width: '100%' }"
+            :placeholder="$t('page.attack_log.batch_delete_select_placeholder')"
+            clearable
+          />
+        </div>
+        <div>
+          <div style="font-weight: 500; margin-bottom: 8px;">{{ $t('common.batch_delete.delete_mode_label') }}</div>
+          <t-radio-group v-model="batchDeleteMode" style="display: flex; flex-direction: column; gap: 8px;">
+            <t-radio value="tag_only">{{ $t('common.batch_delete.mode_tag_only') }}</t-radio>
+            <t-radio value="with_logs"><span style="color: #e34d59;">{{ $t('common.batch_delete.mode_with_logs') }}</span></t-radio>
+          </t-radio-group>
+        </div>
+      </div>
+    </t-dialog>
 
     <t-dialog
       :header="$t('page.attack_log.attack_ip_visit_detail_list_header')"
@@ -182,11 +224,19 @@ export default Vue.extend({
       attackIpVisible:false,//访问明细
       trans_to_parent_ip:"",//传递给
       deleteLogMode: 'tag_only',//删除模式
+      batchDeleteVisible: false,
+      batchDeleteTags: [],
+      batchDeleteMode: 'tag_only',
+      batchDeleteLoading: false,
+      batchDeleteProgress: 0,
     };
   },
   computed: {
     offsetTop() {
       return this.$store.state.setting.isUseTabsRouter ? 48 : 0;
+    },
+    attackTagsForBatch() {
+      return this.attackTags.filter((t: any) => t.value !== '');
     },
     columnControllerConfig() {
       return {
@@ -275,7 +325,7 @@ export default Vue.extend({
         this.selectedRowKeys.splice(selectedIdx, 1);
       }
       this.confirmVisible = false;
-      this.$message.success('删除成功');
+      this.$message.success(this.$t('common.tips.delete_success'));
       this.resetIdx();
     },
     onCancel() {
@@ -386,19 +436,17 @@ export default Vue.extend({
       let that = this
       const currentTag = this.attackSearchformData.rule
       if (!currentTag) {
-        this.$message.warning('请选择要删除的规则标签');
+        this.$message.warning(this.$t('page.attack_log.select_tag_warning'));
         return;
       }
 
-      // 第一步：确认是否删除标签
       const dialog1 = this.$dialog.confirm({
-        header: '删除规则标签',
-        body: '确定要删除规则标签 "' + currentTag + '" 吗？',
-        confirmBtn: '下一步',
-        cancelBtn: '取消',
+        header: this.$t('page.attack_log.delete_tag_header'),
+        body: this.$t('page.attack_log.delete_tag_confirm', { tag: currentTag }),
+        confirmBtn: this.$t('common.next_step'),
+        cancelBtn: this.$t('common.cancel'),
         onConfirm: ({ e }) => {
           dialog1.destroy();
-          // 第二步：询问是否连带删除日志
           that.askDeleteLogsMode(currentTag);
         },
         onClose: ({ e, trigger }) => {
@@ -409,34 +457,31 @@ export default Vue.extend({
     // 询问是否连带删除日志
     askDeleteLogsMode(tagName){
       let that = this
-      
+
       const dialog2 = this.$dialog.confirm({
-        header: '是否连带删除相关日志？',
-        body: '请选择删除方式：\n\n【仅删除标签】：只删除标签统计数据，不影响原始日志\n\n【同时删除日志】：删除标签和所有相关攻击日志\n   ⚠️ 警告：数据量大时需要较长时间，且不可恢复！',
+        header: this.$t('page.attack_log.delete_mode_dialog_header'),
+        body: this.$t('page.attack_log.delete_mode_dialog_body'),
         confirmBtn: {
-          content: '同时删除日志',
-          theme: 'danger',  // 红色危险按钮
+          content: this.$t('common.batch_delete.mode_with_logs_btn'),
+          theme: 'danger',
           variant: 'base'
         },
         cancelBtn: {
-          content: '仅删除标签',
-          theme: 'default',  // 灰色普通按钮
+          content: this.$t('common.batch_delete.mode_tag_only_btn'),
+          theme: 'default',
           variant: 'outline'
         },
         theme: 'warning',
         onConfirm: ({ e }) => {
-          // 选择同时删除日志
           dialog2.destroy();
           that.confirmDeleteTag(tagName, 'with_logs');
         },
         onCancel: ({ e }) => {
-          // 选择仅删除标签
           dialog2.destroy();
           that.confirmDeleteTag(tagName, 'tag_only');
         },
         onClose: ({ e, trigger }) => {
           if (trigger === 'cancel') {
-            // 点击取消按钮，执行仅删除标签
             that.confirmDeleteTag(tagName, 'tag_only');
           }
           dialog2.hide();
@@ -446,9 +491,9 @@ export default Vue.extend({
     // 确认删除tag
     confirmDeleteTag(tagName, deleteMode) {
       let that = this
-      
-      that.$message.loading('正在删除，请稍候...', 0);
-      
+
+      that.$message.loading(that.$t('common.deleting'), 0);
+
       deleteTagByNameApi({
         tag_name: tagName,
         delete_logs: deleteMode === 'with_logs'
@@ -458,21 +503,74 @@ export default Vue.extend({
           let resdata = res
           console.log(resdata)
           if (resdata.code === 0) {
-            that.$message.success(resdata.msg || '删除成功');
-            // 重置搜索条件
+            that.$message.success(resdata.msg || that.$t('common.tips.delete_success'));
             that.attackSearchformData.rule = ''
-            // 重新加载标签列表和数据列表
             that.getIpTags()
             that.getList('')
           } else {
-            that.$message.warning(resdata.msg || '删除失败');
+            that.$message.warning(resdata.msg || that.$t('common.tips.delete_failed'));
           }
         })
         .catch((e: Error) => {
           that.$message.closeAll();
           console.log(e);
-          that.$message.error('删除失败: ' + e.message);
+          that.$message.error(that.$t('common.tips.delete_failed_msg', { msg: e.message }));
         })
+    },
+    handleBatchSelectAll() {
+      this.batchDeleteTags = this.attackTagsForBatch.map((t: any) => t.value);
+    },
+    handleBatchInvertSelection() {
+      this.batchDeleteTags = this.attackTagsForBatch
+        .filter((t: any) => !this.batchDeleteTags.includes(t.value))
+        .map((t: any) => t.value);
+    },
+    handleBatchClearSelection() {
+      this.batchDeleteTags = [];
+    },
+    handleBatchDeleteTag() {
+      this.batchDeleteTags = [];
+      this.batchDeleteMode = 'tag_only';
+      this.batchDeleteProgress = 0;
+      this.batchDeleteLoading = false;
+      this.batchDeleteVisible = true;
+    },
+    async confirmBatchDelete() {
+      if (this.batchDeleteTags.length === 0) {
+        this.$message.warning(this.$t('common.batch_delete.select_warning'));
+        return;
+      }
+      let that = this;
+      that.batchDeleteLoading = true;
+      that.batchDeleteProgress = 0;
+      let successCount = 0;
+      let failCount = 0;
+      for (const tagName of that.batchDeleteTags) {
+        try {
+          const res: any = await deleteTagByNameApi({
+            tag_name: tagName,
+            delete_logs: that.batchDeleteMode === 'with_logs',
+          });
+          if (res.code === 0) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch (e) {
+          failCount++;
+        }
+        that.batchDeleteProgress++;
+      }
+      that.batchDeleteLoading = false;
+      that.batchDeleteVisible = false;
+      if (failCount === 0) {
+        that.$message.success(that.$t('common.batch_delete.success', { count: successCount }));
+      } else {
+        that.$message.warning(that.$t('common.batch_delete.partial_success', { success: successCount, fail: failCount }));
+      }
+      that.attackSearchformData.rule = '';
+      that.getIpTags();
+      that.getList('');
     },
     //end meathod
   },
