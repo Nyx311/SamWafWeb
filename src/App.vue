@@ -23,6 +23,7 @@ import config from '@/config/style';
 import websocket from "@/utils/websocket.js";
 import { DialogPlugin } from 'tdesign-vue';
 import  {AesDecrypt} from './utils/usuallytool'
+import { v4 as uuidv4 } from 'uuid'
 import { clearLocalStorageExceptPreserved, saveCurrentUrl } from '@/constants';
 const env = import.meta.env.MODE || 'development';
 
@@ -55,7 +56,26 @@ export default Vue.extend({
   },
   methods:{
       setupGlobalErrorHandler() {
-        const handle = (msg) => {
+        const IGNORE_PATTERNS = [
+          /network\s*error/i,
+          /failed\s*to\s*fetch/i,
+          /request\s*(aborted|cancelled|canceled|timed?\s*out)/i,
+          /the\s*user\s*aborted/i,
+          /ResizeObserver\s*loop/i,
+          /NavigationDuplicated/i,
+          /Avoided\s*redundant\s*navigation/i,
+        ];
+
+        const isCritical = (msg, src) => {
+          const msgStr = String(msg || '').trim();
+          if (!msgStr || /^Script\s*error\.?$/i.test(msgStr)) return false;
+          if (src && /^(chrome|moz|safari)-extension:/.test(src)) return false;
+          if (IGNORE_PATTERNS.some(p => p.test(msgStr))) return false;
+          return true;
+        };
+
+        const handle = (msg, src) => {
+          if (!isCritical(msg, src)) return;
           if (this.emergencyDialogShown) return;
           if (!localStorage.getItem('access_token')) return;
           const path = this.$store.state.sysparams?.emergencyPath;
@@ -64,8 +84,12 @@ export default Vue.extend({
           this.emergencyError = String(msg);
           this.showEmergencyDialog = true;
         };
-        window.onerror = (msg, src, line, col, err) => handle(err?.message || msg);
-        window.addEventListener('unhandledrejection', (e) => handle(e.reason?.message || e.reason));
+
+        window.onerror = (msg, src, line, col, err) => handle(err?.message || msg, src);
+        window.addEventListener('unhandledrejection', (e) => {
+          if (!(e.reason instanceof Error)) return;
+          handle(e.reason.message, null);
+        });
       },
       enterEmergencyMode() {
         const path = this.$store.state.sysparams?.emergencyPath;
@@ -147,6 +171,8 @@ export default Vue.extend({
               ? `http://127.0.0.1:26666${dlSecPath}/api/v1/waflog/attack/download`
               : `${window.location.protocol}//${window.location.host}${dlSecPath}/api/v1/waflog/attack/download`
             downloadUrl = downloadUrl +"?X-Token="+token
+              +"&X-Request-Time="+Math.floor(Date.now() / 1000).toString()
+              +"&X-Request-Id="+uuidv4()
             console.log(downloadUrl)
             window.open(downloadUrl)
           }else if(wsData.msg_cmd_type==="SystemStats"){
