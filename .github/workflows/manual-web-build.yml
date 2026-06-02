@@ -1,0 +1,51 @@
+name: Manual Web Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build dist
+        run: npm run build
+
+      - name: Create dist packages
+        run: |
+          zip -r dist.zip dist
+          tar -czf dist.tar.gz dist
+
+      - name: Upload dist.zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: SamWafWeb-dist-zip-${{ github.sha }}
+          path: dist.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload dist.tar.gz
+        uses: actions/upload-artifact@v4
+        with:
+          name: SamWafWeb-dist-tar-gz-${{ github.sha }}
+          path: dist.tar.gz
+          if-no-files-found: error
+          retention-days: 7
