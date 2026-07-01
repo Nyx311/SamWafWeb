@@ -123,24 +123,6 @@ export default [
         meta: { title: 'menu.host.firewall_ip_block' },
 
       },
-      /*{
-        path: 'wafTamperProtection',
-        name: 'WafTamperProtection',
-        component: () => import('@/pages/waf/tamper_protection/index.vue'),
-        meta: { title: 'menu.host.tamper_protection' },
-      } ,*/
-      {
-        path: 'wafTamperProtectionLog',
-        name: 'WafTamperProtectionLog',
-        component: () => import('@/pages/waf/tamper_protection_log/index.vue'),
-        meta: { title: 'menu.host.tamper_protection_log', hidden: true },
-      },
-      {
-        path: 'wafTamperProtectionFileHash',
-        name: 'WafTamperProtectionFileHash',
-        component: () => import('@/pages/waf/tamper_protection_file_hash/index.vue'),
-        meta: { title: 'menu.host.tamper_protection_file_hash', hidden: true },
-      },
       {
         path: 'wafPathRulelist',
         name: 'WafPathRuleList',
@@ -217,6 +199,21 @@ export default [
         name: 'Tunnel',
         component: () => import('@/pages/waf/tunnel/index.vue'),
         meta: { title: 'menu.tunnel.list_title' },
+      },
+    ],
+  },
+  {
+    path: '/application',
+    name: 'application',
+    component: Layout,
+    redirect: '/application',
+    meta: { title: 'menu.application.parent_title', icon: ServerIcon },
+    children: [
+      {
+        path: 'AppList',
+        name: 'AppList',
+        component: () => import('@/pages/waf/application/index.vue'),
+        meta: { title: 'menu.application.list_title' },
       },
     ],
   },
@@ -308,6 +305,12 @@ export default [
         name: 'OwaspManage',
         component: () => import('@/pages/waf/owasp/index.vue'),
         meta: { title: 'menu.system.owasp_title' },
+      },
+      {
+        path: 'AIModelManage',
+        name: 'AIModelManage',
+        component: () => import('@/pages/waf/ai/index.vue'),
+        meta: { title: 'menu.system.ai_title' },
       },
       {
         path: 'RumtimeSysteminfo',

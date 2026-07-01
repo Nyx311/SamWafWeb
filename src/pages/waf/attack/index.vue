@@ -162,7 +162,7 @@
           <t-form-item>
             <t-button theme="primary" :style="{ marginLeft: '8px' }" @click="getList('all')"> {{ $t('common.search') }}
             </t-button>
-            <t-button theme="primary" :style="{ marginLeft: '8px' }" v-if="attack_ip == ''"
+            <t-button theme="primary" :style="{ marginLeft: '8px' }" v-if="attack_ip == '' && isFileBasedDb"
               @click="exportDbVisible = true">
               {{
                 $t('common.export') }} </t-button>
@@ -220,6 +220,14 @@
               {{ row.log_only_mode == '1' ? $t('page.visit_log.log_only_mode_on') : $t('page.visit_log.log_only_mode_off') }}
             </t-tag>
           </template>
+          <template #ai_score="{ row }">
+            <t-tag v-if="row.ai_score > 0"
+              :theme="row.ai_score >= 0.9 ? 'danger' : (row.ai_score >= 0.6 ? 'warning' : 'primary')"
+              variant="light">
+              {{ Number(row.ai_score).toFixed(2) }}
+            </t-tag>
+            <span v-else>-</span>
+          </template>
           <template #src_ip="{ row }">
             <span>{{ row.src_ip }}</span>
             <t-button theme="primary" shape="round" size="small" style="margin-left: 8px;" @click="handleAddipblock(row)">
@@ -231,6 +239,14 @@
               $t('common.search')
               + $t('page.visit_log.source_ip') }}</a>
             <a class="t-button-link" @click="handleClickDetail(slotProps)">{{ $t('common.details') }}</a>
+            <a class="t-button-link" style="margin-left: 8px" @click="openAiMarkDialog(slotProps.row)">
+              <t-tag v-if="aiMarkMap[slotProps.row.req_uuid] && aiMarkMap[slotProps.row.req_uuid].mark"
+                :theme="aiMarkMap[slotProps.row.req_uuid].mark === 'attack' ? 'danger' : (aiMarkMap[slotProps.row.req_uuid].mark === 'normal' ? 'success' : 'default')"
+                variant="light" size="small">
+                {{ aiMarkText(aiMarkMap[slotProps.row.req_uuid]) }}
+              </t-tag>
+              <span v-else>{{ $t('page.visit_log.ai_mark') }}</span>
+            </a>
           </template>
         </t-table>
       </div>
@@ -246,6 +262,29 @@
       :onClose="() => { this.visitDetailVisible = false }">
       <visit-detail-page :prop_current_db="searchformData.current_db_name"
         :prop_req_uuid="visitDetailUid"></visit-detail-page>
+    </t-dialog>
+
+    <!-- AI 训练标记弹窗 -->
+    <t-dialog :header="$t('page.visit_log.ai_mark_dialog_title')" :visible.sync="aiMarkDialogVisible" width="460px"
+      :onClose="() => { this.aiMarkDialogVisible = false }">
+      <t-form labelAlign="top">
+        <t-form-item :label="$t('page.visit_log.ai_mark_verdict')">
+          <t-radio-group v-model="aiMarkForm.verdict">
+            <t-radio-button value="normal">{{ $t('page.visit_log.ai_mark_normal') }}</t-radio-button>
+            <t-radio-button value="attack">{{ $t('page.visit_log.ai_mark_attack') }}</t-radio-button>
+            <t-radio-button value="ignore">{{ $t('page.visit_log.ai_mark_ignore') }}</t-radio-button>
+          </t-radio-group>
+        </t-form-item>
+        <t-form-item v-if="aiMarkForm.verdict === 'attack'" :label="$t('page.visit_log.ai_mark_category')">
+          <t-select v-model="aiMarkForm.attackType" :options="aiCatSelectOptions" style="width: 240px" />
+        </t-form-item>
+      </t-form>
+      <template #footer>
+        <t-button v-if="aiMarkDialogRow && aiMarkMap[aiMarkDialogRow.req_uuid]" theme="danger" variant="outline"
+          @click="confirmAiUnmark">{{ $t('page.visit_log.ai_mark_unmark') }}</t-button>
+        <t-button theme="default" @click="aiMarkDialogVisible = false">{{ $t('common.cancel') }}</t-button>
+        <t-button theme="primary" @click="confirmAiMark">{{ $t('common.confirm') }}</t-button>
+      </template>
     </t-dialog>
 
     <!-- 列配置弹窗 -->
@@ -334,6 +373,7 @@ import { SearchIcon } from 'tdesign-icons-vue';
 import Trend from '@/components/trend/index.vue';
 import { prefix } from '@/config/global';
 import { allsharedblist, exportlog } from '@/apis/waflog/attacklog';
+import { aiMarkLabelApi, aiUnmarkLabelApi, aiLabelByUuidsApi } from '@/apis/ai';
 import VisitDetailPage from './detail/index.vue'
 
 import { NowDate, ConvertStringToUnix, ConvertDateToString, ConvertUnixToDate } from '@/utils/date';
@@ -450,6 +490,10 @@ export default Vue.extend({
       prefix,
       dataLoading: false,
       data: [],
+      aiMarkMap: {}, // req_uuid -> { mark, attack_type }，AI训练标签人工修正状态
+      aiMarkDialogVisible: false,
+      aiMarkDialogRow: null,
+      aiMarkForm: { verdict: 'attack', attackType: '' },
       selectedRowKeys: [],
       value: 'first',
       customText: false,
@@ -457,7 +501,7 @@ export default Vue.extend({
       tempDisplayColumns: [], // 临时存储列配置
       // 默认显示的列配置
       defaultDisplayColumns: staticColumn.concat(['guest_identification', 'time_spent', 'create_time', 'host', 'method', 'url', 'src_ip', 'country','log_only_mode','req_uuid']),
-      displayColumns: staticColumn.concat(['guest_identification', 'time_spent', 'create_time', 'host', 'method', 'url', 'src_ip', 'country' ]),
+      displayColumns: staticColumn.concat(['guest_identification', 'time_spent', 'create_time', 'host', 'method', 'url', 'src_ip', 'country', 'log_only_mode' ]),
       columns: [
         {
           title: this.$t('page.visit_log.guest_identity'),
@@ -500,6 +544,13 @@ export default Vue.extend({
           width: 120,
           ellipsis: true,
           colKey: 'log_only_mode',
+        },
+        {
+          title: this.$t('page.visit_log.ai_score'),
+          width: 90,
+          ellipsis: true,
+          colKey: 'ai_score',
+          sorter: true,
         },
         {
           title: this.$t('page.visit_log.trigger_rule'),
@@ -652,6 +703,8 @@ export default Vue.extend({
       host_dic: {},
       //日志存档字典
       share_db_dic: {},
+      //当前是否为文件型数据库(SQLite)：仅 SQLite 支持日志文件导出，MySQL 隐藏导出按钮
+      isFileBasedDb: true,
       //export db
       exportDbVisible: false,
       visitDetailVisible: false,//访问详情弹窗
@@ -691,7 +744,33 @@ export default Vue.extend({
   computed: {
     offsetTop() {
       return this.$store.state.setting.isUseTabsRouter ? 48 : 0;
-    }, 
+    },
+    // 确认攻击时的类别下拉选项（空=默认自动判定）
+    aiCatSelectOptions() {
+      return [
+        { label: this.$t('page.visit_log.ai_cat_auto'), value: '' },
+        { label: this.$t('page.visit_log.ai_cat_sqli'), value: 'sqli' },
+        { label: this.$t('page.visit_log.ai_cat_xss'), value: 'xss' },
+        { label: this.$t('page.visit_log.ai_cat_rce'), value: 'rce' },
+        { label: this.$t('page.visit_log.ai_cat_traversal'), value: 'traversal' },
+        { label: this.$t('page.visit_log.ai_cat_inject'), value: 'inject' },
+        { label: this.$t('page.visit_log.ai_cat_scan'), value: 'scan' },
+        { label: this.$t('page.visit_log.ai_cat_other'), value: 'other' },
+      ];
+    },
+    // 攻击类别 code -> 显示名
+    aiCatLabels() {
+      return {
+        sqli: this.$t('page.visit_log.ai_cat_sqli'),
+        xss: this.$t('page.visit_log.ai_cat_xss'),
+        rce: this.$t('page.visit_log.ai_cat_rce'),
+        traversal: this.$t('page.visit_log.ai_cat_traversal'),
+        inject: this.$t('page.visit_log.ai_cat_inject'),
+        scan: this.$t('page.visit_log.ai_cat_scan'),
+        owasp: 'OWASP',
+        other: this.$t('page.visit_log.ai_cat_other'),
+      };
+    },
     // 可用字段列表
     availableFields() {
       return [
@@ -813,12 +892,41 @@ export default Vue.extend({
     loadColumnConfig() {
       try {
         const savedConfig = localStorage.getItem('attack_table_display_columns');
-        if (savedConfig) {
-          const parsedConfig = JSON.parse(savedConfig);
-          if (Array.isArray(parsedConfig) && parsedConfig.length > 0) {
-            this.displayColumns = parsedConfig;
-          }
+        if (!savedConfig) {
+          return;
         }
+        const parsedConfig = JSON.parse(savedConfig);
+        if (!Array.isArray(parsedConfig) || parsedConfig.length === 0) {
+          return;
+        }
+
+        // 全部可选列（列配置弹窗里能勾选的字段）
+        const allFieldKeys = this.availableFields.map((f) => f.value);
+        // 用户上次见过的可选列集合，用于区分"用户主动取消的列"和"程序新增的列"
+        let knownKeys = [];
+        try {
+          const parsedKnown = JSON.parse(localStorage.getItem('attack_table_known_columns'));
+          if (Array.isArray(parsedKnown)) knownKeys = parsedKnown;
+        } catch (e) {
+          knownKeys = [];
+        }
+
+        const merged = [...parsedConfig];
+        if (knownKeys.length === 0) {
+          // 兼容旧缓存（无 known 记录）：仅此一次按默认列补齐，之后以 known 记录为准
+          this.defaultDisplayColumns.forEach((col) => {
+            if (!merged.includes(col)) merged.push(col);
+          });
+        } else {
+          // 仅自动加入"用户从未见过的新功能列"（如新增的 ai_score），
+          // 用户主动取消勾选的列刷新后不再被强行加回
+          allFieldKeys.forEach((col) => {
+            if (!knownKeys.includes(col) && !merged.includes(col)) merged.push(col);
+          });
+        }
+        this.displayColumns = merged;
+        // 记录当前全部可选列，作为下次判断"新列"的基线
+        localStorage.setItem('attack_table_known_columns', JSON.stringify(allFieldKeys));
       } catch (error) {
         console.error(this.$t('common.column_config_load_failed'), error);
         // 如果加载失败，使用默认配置
@@ -872,9 +980,20 @@ export default Vue.extend({
         console.log("loadShareDbList", resdata)
         if (resdata.code === 0) {
           let share_options = resdata.data;
+          let currentName = "";
           for (let i = 0; i < share_options.length; i++) {
             that.share_db_dic[share_options[i].file_name] = share_options[i].file_name + "(" + share_options[i].cnt + ")"
+            // 后端按驱动标记当前(实时)分片：SQLite=local_log.db，MySQL=web_logs
+            if (share_options[i].is_current) {
+              currentName = share_options[i].file_name;
+            }
           }
+          // 默认选中当前驱动的实时分片，避免 MySQL 下仍显示 SQLite 味的 local_log.db
+          if (currentName !== "") {
+            that.searchformData.current_db_name = currentName;
+          }
+          // 文件型(SQLite)实时分片名以 .db 结尾；MySQL 为 web_logs(无后缀)。据此决定是否显示导出按钮
+          that.isFileBasedDb = currentName === "" || currentName.endsWith(".db");
         }
       })
         .catch((e: Error) => {
@@ -938,6 +1057,7 @@ export default Vue.extend({
               ...this.pagination,
               total: resdata.data.total,
             };
+            this.loadAiMarks();
           } else {
             that.$message.warning(resdata.msg);
           }
@@ -949,6 +1069,97 @@ export default Vue.extend({
           this.dataLoading = false;
         });
       this.dataLoading = true;
+    },
+    // 加载当前页日志的 AI 训练标签修正状态
+    loadAiMarks() {
+      const uuids = (this.data || []).map((r) => r.req_uuid).filter((u) => !!u);
+      if (uuids.length === 0) {
+        this.aiMarkMap = {};
+        return;
+      }
+      aiLabelByUuidsApi({ req_uuids: uuids })
+        .then((res) => {
+          if (res.code === 0) {
+            this.aiMarkMap = res.data || {};
+          }
+        })
+        .catch(() => {});
+    },
+    // info: { mark, attack_type }
+    aiMarkText(info) {
+      if (!info || !info.mark) return '';
+      if (info.mark === 'normal') return this.$t('page.visit_log.ai_mark_normal');
+      if (info.mark === 'ignore') return this.$t('page.visit_log.ai_mark_ignore');
+      if (info.mark === 'attack') {
+        const cat = info.attack_type ? this.aiCatLabels[info.attack_type] || info.attack_type : '';
+        return cat ? `${this.$t('page.visit_log.ai_mark_attack')}:${cat}` : this.$t('page.visit_log.ai_mark_attack');
+      }
+      return '';
+    },
+    // 打开标记弹窗，预填已有标记
+    openAiMarkDialog(row) {
+      this.aiMarkDialogRow = row;
+      const existing = this.aiMarkMap[row.req_uuid];
+      this.aiMarkForm = {
+        verdict: existing && existing.mark ? existing.mark : 'attack',
+        attackType: existing && existing.attack_type ? existing.attack_type : '',
+      };
+      this.aiMarkDialogVisible = true;
+    },
+    // 弹窗确定：按判定提交标记
+    confirmAiMark() {
+      if (!this.aiMarkDialogRow) return;
+      const v = this.aiMarkForm.verdict;
+      const value = v === 'attack' ? `attack|${this.aiMarkForm.attackType || ''}` : v;
+      this.handleAiMark(this.aiMarkDialogRow, value);
+      this.aiMarkDialogVisible = false;
+    },
+    // 弹窗取消标记
+    confirmAiUnmark() {
+      if (!this.aiMarkDialogRow) return;
+      this.handleAiMark(this.aiMarkDialogRow, 'unmark');
+      this.aiMarkDialogVisible = false;
+    },
+    // 标记/取消标记某条日志的训练标签；value 形如 normal/ignore/unmark 或 attack|<type>
+    handleAiMark(row, value) {
+      if (value === 'unmark') {
+        aiUnmarkLabelApi({ req_uuid: row.req_uuid })
+          .then((res) => {
+            if (res.code === 0) {
+              delete this.aiMarkMap[row.req_uuid];
+              this.aiMarkMap = { ...this.aiMarkMap };
+              this.$message.success(this.$t('page.visit_log.ai_mark_unmarked'));
+            } else {
+              this.$message.error(res.msg);
+            }
+          })
+          .catch(() => {});
+        return;
+      }
+      let mark = value;
+      let attackType = '';
+      if (value.indexOf('attack') === 0) {
+        mark = 'attack';
+        attackType = value.split('|')[1] || '';
+      }
+      aiMarkLabelApi({
+        req_uuid: row.req_uuid,
+        host_code: row.host_code,
+        mark,
+        attack_type: attackType,
+        rule: row.rule,
+        src_ip: row.src_ip,
+        url: row.url,
+      })
+        .then((res) => {
+          if (res.code === 0) {
+            this.$set(this.aiMarkMap, row.req_uuid, { mark, attack_type: attackType });
+            this.$message.success(this.$t('page.visit_log.ai_mark_success'));
+          } else {
+            this.$message.error(res.msg);
+          }
+        })
+        .catch(() => {});
     },
     handelExport(keyword) {
 
@@ -1047,7 +1258,7 @@ export default Vue.extend({
     },
     //Jump Url
     handleJumpOnlineUrl() {
-      window.open(this.samwafglobalconfig.getOnlineUrl() + "/guide/attacklog.html");
+      window.open(this.samwafglobalconfig.getOnlineUrl()+"/guide/AttackLog.html");
     },
     /**
      * table 排序
