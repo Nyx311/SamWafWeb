@@ -32,6 +32,72 @@
         </t-loading>
       </t-card>
 
+      <!-- 管理端可信代理网段卡片 -->
+      <t-card class="list-card-container">
+        <template #header>
+          <t-row justify="space-between">
+            <div class="card-header-title">
+              <t-space>
+                <div>{{ $t('page.vpconfig.trusted_proxies_title') }}</div>
+                <t-tooltip :content="$t('page.vpconfig.trusted_proxies_description')">
+                  <t-icon name="help-circle" />
+                </t-tooltip>
+              </t-space>
+            </div>
+            <t-space>
+              <t-button theme="primary" @click="handleTrustedProxiesRefresh">{{ $t('common.refresh') }}</t-button>
+              <t-button theme="primary" @click="handleTrustedProxiesSave">{{ $t('common.save') }}</t-button>
+            </t-space>
+          </t-row>
+        </template>
+
+        <t-loading :loading="trustedProxiesLoading">
+          <t-form :data="trustedProxiesFormData" :label-width="180">
+            <t-form-item :label="$t('page.vpconfig.trusted_proxies')">
+              <t-textarea
+                v-model="trustedProxiesFormData.trusted_proxies"
+                :placeholder="$t('page.vpconfig.trusted_proxies_placeholder')"
+                :autosize="{ minRows: 3, maxRows: 8 }"
+              />
+              <div class="form-item-tips">{{ $t('page.vpconfig.trusted_proxies_tips') }}</div>
+            </t-form-item>
+          </t-form>
+        </t-loading>
+      </t-card>
+
+      <!-- CORS 跨域白名单卡片 -->
+      <t-card class="list-card-container">
+        <template #header>
+          <t-row justify="space-between">
+            <div class="card-header-title">
+              <t-space>
+                <div>{{ $t('page.vpconfig.cors_title') }}</div>
+                <t-tooltip :content="$t('page.vpconfig.cors_description')">
+                  <t-icon name="help-circle" />
+                </t-tooltip>
+              </t-space>
+            </div>
+            <t-space>
+              <t-button theme="primary" @click="handleCorsRefresh">{{ $t('common.refresh') }}</t-button>
+              <t-button theme="primary" @click="handleCorsSave">{{ $t('common.save') }}</t-button>
+            </t-space>
+          </t-row>
+        </template>
+
+        <t-loading :loading="corsLoading">
+          <t-form :data="corsFormData" :label-width="180">
+            <t-form-item :label="$t('page.vpconfig.cors_origins')">
+              <t-textarea
+                v-model="corsFormData.cors_allow_origins"
+                :placeholder="$t('page.vpconfig.cors_placeholder')"
+                :autosize="{ minRows: 3, maxRows: 8 }"
+              />
+              <div class="form-item-tips">{{ $t('page.vpconfig.cors_tips') }}</div>
+            </t-form-item>
+          </t-form>
+        </t-loading>
+      </t-card>
+
       <!-- 域名白名单卡片 -->
       <t-card class="list-card-container">
         <template #header>
@@ -351,7 +417,7 @@
   <script lang="ts">
   import Vue from 'vue';
   import { prefix } from '@/config/global';
-  import { getIpWhitelistApi, updateIpWhitelistApi, getSslStatusApi, updateSslEnableApi, uploadSslCertApi, restartManagerApi, getSecurityEntryApi, updateSecurityEntryApi, getNoticeTitleApi, updateNoticeTitleApi, getDomainWhitelistApi, updateDomainWhitelistApi, getSslForceHttpsApi, updateSslForceHttpsApi, getSslBindCertApi, updateSslBindCertApi } from '@/apis/vpconfig';
+  import { getIpWhitelistApi, updateIpWhitelistApi, getManageTrustedProxiesApi, updateManageTrustedProxiesApi, getCorsAllowOriginsApi, updateCorsAllowOriginsApi, getSslStatusApi, updateSslEnableApi, uploadSslCertApi, restartManagerApi, getSecurityEntryApi, updateSecurityEntryApi, getNoticeTitleApi, updateNoticeTitleApi, getDomainWhitelistApi, updateDomainWhitelistApi, getSslForceHttpsApi, updateSslForceHttpsApi, getSslBindCertApi, updateSslBindCertApi } from '@/apis/vpconfig';
   import { sslConfigListApi, sslConfigDetailApi } from '@/apis/sslconfig';
   import { MessagePlugin } from 'tdesign-vue';
   
@@ -391,6 +457,16 @@
         formData: {
           ip_whitelist: ''
         },
+        // 管理端可信代理网段（配置存 config.yml，被白名单挡住时可改文件+重启自救）
+        trustedProxiesFormData: {
+          trusted_proxies: ''
+        },
+        trustedProxiesLoading: false,
+        // CORS 跨域来源白名单（配置存 config.yml，回环/本机始终放行）
+        corsFormData: {
+          cors_allow_origins: ''
+        },
+        corsLoading: false,
         sslFormData: {
           ssl_enable: false,
           has_cert: false,
@@ -468,6 +544,8 @@
     },
     mounted() {
       this.fetchData();
+      this.fetchTrustedProxies();
+      this.fetchCors();
       this.fetchDomainWhitelist();
       this.fetchSslStatus();
       this.fetchSslForceHttps();
@@ -496,6 +574,84 @@
       },
       handleRefresh() {
         this.fetchData();
+      },
+      fetchTrustedProxies() {
+        this.trustedProxiesLoading = true;
+        getManageTrustedProxiesApi({})
+          .then((res) => {
+            if (res.code === 0) {
+              this.trustedProxiesFormData.trusted_proxies = res.data.trusted_proxies || '';
+            } else {
+              MessagePlugin.error(res.msg || this.$t('common.tips.api_error'));
+            }
+          })
+          .catch(() => {
+            MessagePlugin.error(this.$t('common.tips.api_error'));
+          })
+          .finally(() => {
+            this.trustedProxiesLoading = false;
+          });
+      },
+      handleTrustedProxiesRefresh() {
+        this.fetchTrustedProxies();
+      },
+      handleTrustedProxiesSave() {
+        this.trustedProxiesLoading = true;
+        updateManageTrustedProxiesApi({
+          trusted_proxies: this.trustedProxiesFormData.trusted_proxies
+        })
+          .then((res) => {
+            if (res.code === 0) {
+              MessagePlugin.success(this.$t('common.tips.save_success'));
+            } else {
+              MessagePlugin.error(res.msg || this.$t('common.tips.save_failed'));
+            }
+          })
+          .catch(() => {
+            MessagePlugin.error(this.$t('common.tips.save_failed'));
+          })
+          .finally(() => {
+            this.trustedProxiesLoading = false;
+          });
+      },
+      fetchCors() {
+        this.corsLoading = true;
+        getCorsAllowOriginsApi({})
+          .then((res) => {
+            if (res.code === 0) {
+              this.corsFormData.cors_allow_origins = res.data.cors_allow_origins || '';
+            } else {
+              MessagePlugin.error(res.msg || this.$t('common.tips.api_error'));
+            }
+          })
+          .catch(() => {
+            MessagePlugin.error(this.$t('common.tips.api_error'));
+          })
+          .finally(() => {
+            this.corsLoading = false;
+          });
+      },
+      handleCorsRefresh() {
+        this.fetchCors();
+      },
+      handleCorsSave() {
+        this.corsLoading = true;
+        updateCorsAllowOriginsApi({
+          cors_allow_origins: this.corsFormData.cors_allow_origins
+        })
+          .then((res) => {
+            if (res.code === 0) {
+              MessagePlugin.success(this.$t('common.tips.save_success'));
+            } else {
+              MessagePlugin.error(res.msg || this.$t('common.tips.save_failed'));
+            }
+          })
+          .catch(() => {
+            MessagePlugin.error(this.$t('common.tips.save_failed'));
+          })
+          .finally(() => {
+            this.corsLoading = false;
+          });
       },
       fetchDomainWhitelist() {
         this.domainLoading = true;
