@@ -2,9 +2,15 @@ name: Manual Web Build
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag from upstream, for example v1.3.238'
+        required: false
+        type: string
+        default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -16,6 +22,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Use Node.js
         uses: actions/setup-node@v4
@@ -33,6 +42,48 @@ jobs:
         run: |
           zip -r dist.zip dist
           tar -czf dist.tar.gz dist
+
+      - name: Prepare release metadata
+        id: release
+        run: |
+          UPSTREAM_TAG="${{ inputs.release_tag }}"
+          LATEST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -n 1)
+          NEXT_TAG=$(node -p "const v=require('./package.json').version.split('.').map(Number); v[2]=(v[2]||0)+1; 'v'+v.join('.')")
+          if [ -n "${UPSTREAM_TAG}" ]; then
+            TAG="${UPSTREAM_TAG}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ] && [ -n "${GITHUB_REF_NAME}" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [ -n "${LATEST_TAG}" ]; then
+            TAG="${LATEST_TAG}"
+          else
+            TAG="${NEXT_TAG}"
+          fi
+          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_name=SamWafWeb ${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.release.outputs.tag_name }}"
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist.zip dist.tar.gz \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+            gh release edit "${TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "${{ steps.release.outputs.release_name }}" \
+              --notes "Manual web build from ${GITHUB_SHA}" \
+              --latest
+          else
+            gh release create "${TAG}" dist.zip dist.tar.gz \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "${{ steps.release.outputs.release_name }}" \
+              --notes "Manual web build from ${GITHUB_SHA}" \
+              --latest
+          fi
 
       - name: Upload dist.zip
         uses: actions/upload-artifact@v4
