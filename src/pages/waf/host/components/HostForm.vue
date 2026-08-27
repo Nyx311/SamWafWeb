@@ -310,6 +310,103 @@
                 </t-radio>
               </t-radio-group>
             </t-form-item>
+            <!-- 真实IP来源加固：仅代理模式下有意义(网卡模式直接用网络层IP，此设置被忽略)。
+                 默认(空)保持旧行为取 XFF 最左，向后兼容；选择加固模式后才改变取值。 -->
+            <t-form-item v-if="formData.ip_mode === 'proxy'" name="ip_source_mode">
+              <template #label>
+                <span>{{ $t('page.host.ip_source_mode') }}</span>
+                <t-tooltip class="placement top center" :content="$t('page.host.ip_source_mode_tips')" placement="top"
+                           :overlay-style="{ width: '340px' }" show-arrow>
+                  <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                </t-tooltip>
+              </template>
+              <div class="ip-source-block">
+                <t-select v-model="formData.ip_source_mode" :style="{ width: '320px' }" clearable>
+                  <t-option value="" :label="$t('page.host.ip_source_compat')" />
+                  <t-option value="header" :label="$t('page.host.ip_source_header')" />
+                  <t-option value="xff_depth" :label="$t('page.host.ip_source_xff')" />
+                  <t-option value="cdn_preset" :label="$t('page.host.ip_source_cdn')" />
+                </t-select>
+                <div class="limit-mode-desc">{{ ipSourceModeDesc }}</div>
+                <!-- 全局(系统配置 gwaf_proxy_header) 与 站点设置 谁生效，必须写在用户眼前，否则改了全局发现某站点没变会懵 -->
+                <div v-if="formData.ip_source_mode === ''" class="ip-source-scope">
+                  <t-alert v-if="globalProxyHeader" theme="info">
+                    <div>
+                      {{ $t('page.host.ip_scope_inherit', { header: globalProxyHeader }) }}
+                      <a class="t-button-link" @click="goSystemConfig">{{ $t('page.host.ip_scope_edit_global') }}</a>
+                      <div class="limit-mode-desc">{{ $t('page.host.ip_scope_inherit_desc') }}</div>
+                    </div>
+                  </t-alert>
+                  <t-alert v-else theme="error">
+                    <div>
+                      {{ $t('page.host.ip_scope_global_empty') }}
+                      <a class="t-button-link" @click="goSystemConfig">{{ $t('page.host.ip_scope_goto_global') }}</a>
+                    </div>
+                  </t-alert>
+                </div>
+                <div v-else-if="formData.ip_source_mode !== 'nic'" class="ip-source-scope">
+                  <t-alert theme="success" :message="$t('page.host.ip_scope_own')" />
+                </div>
+                <!-- 到底该配哪个头，只能看真实到达的请求头才知道；这里直接给个入口，免得跑去日志详情里翻(#956) -->
+                <div v-if="isEdit && formData.code" class="ip-probe-entry">
+                  <a class="t-button-link" @click="openIpProbe">{{ $t('page.host.ip_probe_entry') }}</a>
+                </div>
+              </div>
+            </t-form-item>
+            <t-form-item v-if="formData.ip_mode === 'proxy' && formData.ip_source_mode === 'cdn_preset'" :label="$t('page.host.cdn_provider')" name="cdn_provider">
+              <t-select v-model="formData.cdn_provider" :style="{ width: '320px' }" @change="onCdnProviderChange">
+                <t-option value="cloudflare" label="Cloudflare (CF-Connecting-IP)" />
+                <t-option value="fastly" label="Fastly (Fastly-Client-IP)" />
+                <t-option value="cloudfront" label="AWS CloudFront" />
+                <t-option value="edgeone" label="腾讯云 EdgeOne (EO-Connecting-IP)" />
+                <t-option value="aliyun" label="阿里云 CDN (Ali-Cdn-Real-Ip)" />
+                <t-option value="akamai" label="Akamai (True-Client-IP)" />
+              </t-select>
+            </t-form-item>
+            <!-- CDN 回源段由中心库统一管理：只读展示已下载条数/上次更新，不让用户手填 -->
+            <t-form-item v-if="formData.ip_mode === 'proxy' && formData.ip_source_mode === 'cdn_preset' && formData.cdn_provider"
+                         :label="$t('page.host.cdn_trusted_ips')">
+              <div>
+                <template v-if="cdnProviderInfo">
+                  <span v-if="cdnProviderInfo.count > 0" style="color: var(--td-success-color);">
+                    {{ $t('page.host.cdn_downloaded', { count: cdnProviderInfo.count }) }}
+                    <span style="color: var(--td-text-color-placeholder);">（{{ $t('page.host.cdn_last_update') }}: {{ formatCdnTs(cdnProviderInfo.last_sync_at) }}）</span>
+                  </span>
+                  <span v-else style="color: var(--td-warning-color);">{{ $t('page.host.cdn_not_fetched') }}</span>
+                  <a class="t-button-link" style="margin-left: 12px;" @click="goCdnPage">{{ $t('page.host.cdn_manage_link') }}</a>
+                </template>
+                <span v-else style="color: var(--td-text-color-placeholder);">-</span>
+                <div class="limit-mode-desc">{{ $t('page.host.cdn_trusted_ips_tips') }}</div>
+              </div>
+            </t-form-item>
+            <!-- 真实IP头名：指定头模式必填；CDN预设模式选填(留空用厂商默认头，填了可覆盖，
+                 例如在 EdgeOne 控制台开了自定义「客户端IP头部」的场景) -->
+            <t-form-item v-if="showIpRealHeader" :label="$t('page.host.ip_real_header')" name="ip_real_header">
+              <div>
+                <t-input :style="{ width: '320px' }" v-model="formData.ip_real_header"
+                         :placeholder="cdnDefaultHeader || 'X-Real-IP / CF-Connecting-IP'"></t-input>
+                <div v-if="formData.ip_source_mode === 'cdn_preset'" class="limit-mode-desc">
+                  {{ $t('page.host.ip_real_header_cdn_desc', { header: cdnDefaultHeader || '-' }) }}
+                </div>
+              </div>
+            </t-form-item>
+            <t-form-item v-if="formData.ip_mode === 'proxy' && formData.ip_source_mode === 'xff_depth'" :label="$t('page.host.ip_trust_depth')" name="ip_trust_depth">
+              <t-input-number :style="{ width: '150px' }" v-model="formData.ip_trust_depth" :min="1" theme="column" />
+            </t-form-item>
+            <!-- 可信代理网段：三种加固模式都用得上(header 校验来源、xff_depth 跳过可信 hop、
+                 cdn_preset 在厂商无法自动拉取回源段时手填兜底) -->
+            <t-form-item v-if="showIpTrustProxies"
+                         :label="$t('page.host.ip_trust_proxies')" name="ip_trust_proxies">
+              <div>
+                <t-textarea :style="{ width: '320px' }" v-model="formData.ip_trust_proxies"
+                            placeholder="172.16.0.0/12,10.0.0.0/8"></t-textarea>
+                <!-- cdn_preset 且中心库没拉到回源段时，这里就是唯一的可信来源，必须填 -->
+                <div v-if="cdnTrustProxiesRequired" style="color: var(--td-error-color);">
+                  {{ $t('page.host.ip_trust_proxies_required') }}
+                </div>
+                <div class="limit-mode-desc">{{ ipTrustProxiesDesc }}</div>
+              </div>
+            </t-form-item>
             <t-form-item :label="$t('page.host.exclude_url_log')" name="exclude_url_log">
               <t-tooltip class="placement top center" :content="$t('page.host.exclude_url_log_tips')" placement="top"
                        :overlay-style="{ width: '200px' }" show-arrow>
@@ -334,6 +431,16 @@
                          :overlay-style="{ width: '200px' }" show-arrow>
                 <t-input-number :style="{ width: '150px' }" v-model="formData.response_time_out" >
                 </t-input-number>
+              </t-tooltip>
+            </t-form-item>
+            <t-form-item :label="$t('page.host.response_buffering.label')" name="is_enable_response_buffering">
+              <t-tooltip class="placement top center"
+                         :content="$t('page.host.response_buffering.tips')" placement="top"
+                         :overlay-style="{ width: '260px' }" show-arrow>
+                <t-radio-group v-model="formData.is_enable_response_buffering">
+                  <t-radio value="1">{{ $t('page.host.response_buffering.enable') }}</t-radio>
+                  <t-radio value="0">{{ $t('page.host.response_buffering.disable') }}</t-radio>
+                </t-radio-group>
               </t-tooltip>
             </t-form-item>
             <t-form-item :label="$t('page.host.default_encoding')" name="default_encoding">
@@ -367,6 +474,17 @@
                   <t-radio value="custom">{{$t('page.host.http_auth_base_type_custom')}}</t-radio>
                 </t-radio-group>
               </t-tooltip>
+            </t-form-item>
+            <t-form-item v-if="formData.is_enable_http_auth_base === '1' && formData.http_auth_base_type === 'custom'">
+              <t-alert theme="info" :close="false">
+                <div>
+                  <div style="margin-bottom: 8px;"><strong>{{$t('page.host.http_auth_custom_page_tips_title')}}</strong></div>
+                  <div>1. {{$t('page.host.http_auth_custom_page_tips_path')}}</div>
+                  <div>2. {{$t('page.host.http_auth_custom_page_tips_lock')}}</div>
+                  <div>3. {{$t('page.host.http_auth_custom_page_tips_global')}}</div>
+                  <div>4. {{$t('page.host.http_auth_custom_page_tips_validate')}}</div>
+                </div>
+              </t-alert>
             </t-form-item>
             <t-form-item v-if="formData.is_enable_http_auth_base === '1'" :label="$t('page.host.http_auth_path_prefix')" name="http_auth_path_prefix">
               <t-tooltip class="placement top center" :content="$t('page.host.http_auth_path_prefix_tips')" placement="top"
@@ -480,6 +598,15 @@
             </template>
             <upload-security-config :upload-security-config="uploadSecurityConfigData" @update="val => uploadSecurityConfigData = val"></upload-security-config>
           </t-tab-panel>
+          <t-tab-panel :value="20">
+            <template #label>
+              <t-icon name="user-safety" style="margin-right: 4px;color:#0052d9"/>
+              {{$t('page.host.tab_access')}}
+            </template>
+            <access-config :access-config="accessConfigData"
+                           :cache-enabled="cacheConfigData && String(cacheConfigData.is_enable_cache) === '1'"
+                           @update="val => accessConfigData = val"></access-config>
+          </t-tab-panel>
           <t-tab-panel :value="15">
             <template #label>
               <t-icon name="swap" style="margin-right: 4px;color:#0052d9"/>
@@ -516,6 +643,10 @@
         ></ssl-form>
       </div>
     </t-dialog>
+    <!-- 真实IP来源诊断(与访问日志页共用同一组件) -->
+    <ip-source-probe-dialog :visible.sync="ipProbeVisible" :host-code="formData.code"
+                            :host-name="formData.host" :can-use-header="true"
+                            @use-header="useProbeHeader" />
 
   </div>
 </template>
@@ -537,14 +668,17 @@
   import ResponseCompressConfig from '../components/ResponseCompressConfig.vue';
   import CookieSecurityConfig from '../components/CookieSecurityConfig.vue';
   import CsrfConfig from '../components/CsrfConfig.vue';
+  import AccessConfig from '../components/AccessConfig.vue';
   import TamperConfig from '../components/TamperConfig.vue';
   import UploadSecurityConfig from '../components/UploadSecurityConfig.vue';
   import PathRuleConfig from '../components/PathRuleConfig.vue';
   import SslForm from '../components/SslForm.vue';
-  import { INITIAL_HEALTHY, INITIAL_CAPTCHA, INITIAL_ANTILEECH,INITIAL_SSL_DATA,INITIAL_CACHE,INITIAL_STATIC_SITE,INITIAL_TRANSPORT,INITIAL_CUSTOM_HEADERS,INITIAL_CUSTOM_RESPONSE_HEADERS,INITIAL_RESPONSE_COMPRESS,INITIAL_COOKIE_SECURITY,INITIAL_CSRF,INITIAL_TAMPER,INITIAL_UPLOAD_SECURITY,DEFAULT_STATIC_SECURITY_HEADERS } from '../constants';
+  import { INITIAL_HEALTHY, INITIAL_CAPTCHA, INITIAL_ANTILEECH,INITIAL_SSL_DATA,INITIAL_CACHE,INITIAL_STATIC_SITE,INITIAL_TRANSPORT,INITIAL_CUSTOM_HEADERS,INITIAL_CUSTOM_RESPONSE_HEADERS,INITIAL_RESPONSE_COMPRESS,INITIAL_COOKIE_SECURITY,INITIAL_CSRF,INITIAL_ACCESS,INITIAL_TAMPER,INITIAL_UPLOAD_SECURITY,DEFAULT_STATIC_SECURITY_HEADERS } from '../constants';
   import {sslConfigListApi,sslConfigAddApi,sslConfigEditApi,sslConfigDetailApi} from '@/apis/sslconfig';
   import {getOrDefault} from '@/utils/usuallytool';
   import {get_detail_by_item_api, edit_system_config_by_item_api} from '@/apis/systemconfig';
+  import {wafCDNProviderInfoApi} from '@/apis/cdnip';
+  import IpSourceProbeDialog from '../components/IpSourceProbeDialog.vue';
   export default Vue.extend({
     name: 'HostForm',
     components: {
@@ -563,9 +697,11 @@
       ResponseCompressConfig,
       CookieSecurityConfig,
       CsrfConfig,
+      AccessConfig,
       TamperConfig,
       UploadSecurityConfig,
       PathRuleConfig,
+      IpSourceProbeDialog,
     },
     props: {
       // 表单数据
@@ -592,10 +728,18 @@
       hostAddUrl: {
         type: String,
         default: ''
+      },
+      // 打开时定位到哪个配置 Tab（1基础内容 4其他配置），供外部深链使用
+      initTab: {
+        type: Number,
+        default: 0
       }
     },
     data() {
       return {
+        cdnProviderInfo: null, // 所选 CDN 厂商中心库状态(只读展示)
+        ipProbeVisible: false,   // 真实IP来源诊断弹窗
+        globalProxyHeader: '',   // 全局「获取访客IP头信息」(兼容模式下本站实际沿用的值)
         formData: {
           ...JSON.parse(JSON.stringify(this.value)),
           // SSL配置模式字段，默认为已有证书
@@ -627,9 +771,10 @@
         responseCompressConfigData: { ...INITIAL_RESPONSE_COMPRESS },
         cookieSecurityConfigData: { ...INITIAL_COOKIE_SECURITY },
         csrfConfigData: { ...INITIAL_CSRF, protect_methods: [...INITIAL_CSRF.protect_methods] },
+        accessConfigData: { ...INITIAL_ACCESS },
         tamperConfigData: { ...INITIAL_TAMPER },
         uploadSecurityConfigData: { ...INITIAL_UPLOAD_SECURITY },
-        activeTab: 1, // 当前激活的配置 Tab（受控，供防御总览开关「配置详情」跳转）
+        activeTab: 1, // 当前激活的配置 Tab（受控，供防御总览开关「配置详情」跳转/外部深链，见 initTab watch）
         // Tab 布局：left=竖向（默认），top=横向；用户偏好持久化到 localStorage
         tabPlacement: localStorage.getItem('samwaf_host_tab_placement') === 'top' ? 'top' : 'left',
         rules: {
@@ -709,6 +854,54 @@
       };
     },
     computed: {
+      // 真实IP来源：随所选模式返回对应解释文案(显示在下拉框下方)
+      ipSourceModeDesc() {
+        const map = {
+          '': 'page.host.ip_source_compat_desc',
+          header: 'page.host.ip_source_header_desc',
+          xff_depth: 'page.host.ip_source_xff_desc',
+          cdn_preset: 'page.host.ip_source_cdn_desc',
+        };
+        return this.$t(map[this.formData.ip_source_mode] || 'page.host.ip_source_compat_desc');
+      },
+      // 所选 CDN 厂商的默认真实IP头(与后端 wafenginecore/clientip/providers.go 保持一致)
+      cdnDefaultHeader() {
+        const map = {
+          cloudflare: 'CF-Connecting-IP',
+          fastly: 'Fastly-Client-IP',
+          cloudfront: 'CloudFront-Viewer-Address',
+          edgeone: 'EO-Connecting-IP',
+          aliyun: 'Ali-Cdn-Real-Ip',
+          akamai: 'True-Client-IP',
+        };
+        return map[this.formData.cdn_provider] || '';
+      },
+      // 真实IP头名输入框：指定头模式必填，CDN预设模式选填(覆盖厂商默认头)
+      showIpRealHeader() {
+        return this.formData.ip_mode === 'proxy' &&
+          ['header', 'cdn_preset'].indexOf(this.formData.ip_source_mode) >= 0;
+      },
+      // 可信代理网段输入框：三种加固模式都需要
+      showIpTrustProxies() {
+        return this.formData.ip_mode === 'proxy' &&
+          ['header', 'xff_depth', 'cdn_preset'].indexOf(this.formData.ip_source_mode) >= 0;
+      },
+      // cdn_preset 且中心库没拉到该厂商回源段时，可信代理网段是唯一可用的可信来源，
+      // 两个都空后端会拒绝保存(否则所有请求都只能取到 CDN 回源节点IP)，提前标红提示
+      cdnTrustProxiesRequired() {
+        return this.formData.ip_source_mode === 'cdn_preset' &&
+          this.cdnProviderInfo && !this.cdnProviderInfo.count &&
+          !(this.formData.ip_trust_proxies || '').trim();
+      },
+      // 可信代理网段：不同模式下作用不同，分别给对应说明
+      ipTrustProxiesDesc() {
+        const map = {
+          header: 'page.host.ip_trust_proxies_header_desc',
+          xff_depth: 'page.host.ip_trust_proxies_xff_desc',
+          cdn_preset: 'page.host.ip_trust_proxies_cdn_desc',
+        };
+        return this.$t(map[this.formData.ip_source_mode] || 'page.host.ip_trust_proxies_tips');
+      },
       // 判断是否需要显示HTTPS重定向提示
       shouldShowHttpsRedirectTip() {
         // 1. 开启了SSL
@@ -752,6 +945,14 @@
       }
     },
     watch: {
+      // 外部深链(如访问日志"IP提取有问题?"跳过来)指定要定位的 Tab。
+      // 组件实例在弹窗打开前就已创建，data() 里取一次是取不到的，必须 watch。
+      initTab: {
+        immediate: true,
+        handler(val) {
+          if (val > 0) this.activeTab = val;
+        },
+      },
       // 切换 Tab 后把内容区和弹窗滚动位置复位到顶部，避免左侧导航过长时右侧内容"看起来是空的"
       activeTab() {
         this.$nextTick(() => {
@@ -780,6 +981,7 @@
           this.formData.is_enable_http_auth_base = this.formData.is_enable_http_auth_base != null ? this.formData.is_enable_http_auth_base.toString() : "0"
           this.formData.http_auth_base_type = this.formData.http_auth_base_type != null ? this.formData.http_auth_base_type : "authorization"
           this.formData.response_time_out = this.formData.response_time_out != null ? this.formData.response_time_out.toString() : "60"
+          this.formData.is_enable_response_buffering = this.formData.is_enable_response_buffering != null ? this.formData.is_enable_response_buffering.toString() : "1"
           this.formData.insecure_skip_verify = this.formData.insecure_skip_verify != null ? this.formData.insecure_skip_verify.toString() : "0"
           this.formData.log_only_mode = this.formData.log_only_mode != null ? this.formData.log_only_mode.toString() : "0"
           // 保证存在且为合法值，并用 $set 确保 Vue2 对新增字段的响应式
@@ -1083,6 +1285,27 @@
             this.csrfConfigData = { ...INITIAL_CSRF, protect_methods: [...INITIAL_CSRF.protect_methods] };
           }
 
+          // 解析统一访问认证(Access 模式)配置
+          // 空值必须落在 mode="0"(继承全局)：存量站点的 access_json 是空的，
+          // 若误落成强制开启，用户升级后整站会立刻要求登录。
+          if (this.formData.access_json && this.formData.access_json !== '') {
+            try {
+              const ac = JSON.parse(this.formData.access_json);
+              this.accessConfigData = {
+                mode: String(ac.mode !== undefined ? ac.mode : 0),
+                exclude_paths: ac.exclude_paths != null ? ac.exclude_paths : '',
+                require_otp: String(ac.require_otp !== undefined ? ac.require_otp : 0),
+                unauth_action: ac.unauth_action != null ? ac.unauth_action : '',
+                allow_ip_group_code: ac.allow_ip_group_code != null ? ac.allow_ip_group_code : '',
+              };
+            } catch (e) {
+              console.error('解析access_json失败', e);
+              this.accessConfigData = { ...INITIAL_ACCESS };
+            }
+          } else {
+            this.accessConfigData = { ...INITIAL_ACCESS };
+          }
+
           // 解析网页防篡改配置
           if (this.formData.tamper_json && this.formData.tamper_json !== '') {
             try {
@@ -1210,9 +1433,59 @@
     },
     created() {
       this.getSslFolderList();
+      this.loadGlobalProxyHeader();
       this.getHttpsRedirectConfig();
+      // 编辑已有站点且为 cdn_preset 时，加载所选厂商中心库状态
+      if (this.formData.ip_source_mode === 'cdn_preset' && this.formData.cdn_provider) {
+        this.loadCdnProviderInfo(this.formData.cdn_provider);
+      }
     },
     methods: {
+      // CDN 厂商选择变化：加载中心库状态(只读展示)
+      onCdnProviderChange(v) {
+        this.cdnProviderInfo = null;
+        if (v) this.loadCdnProviderInfo(v);
+      },
+      loadCdnProviderInfo(provider) {
+        wafCDNProviderInfoApi({ provider })
+          .then((res) => { if (res.code === 0) this.cdnProviderInfo = res.data; })
+          .catch((e) => { console.log(e); });
+      },
+      formatCdnTs(ts) {
+        if (!ts) return '-';
+        return new Date(ts * 1000).toLocaleString();
+      },
+      goCdnPage() {
+        const route = this.$router.resolve({ name: 'WafCDNIP' });
+        window.open(route.href, '_blank');
+      },
+      // 打开"真实IP来源诊断"：看最近真实到达的请求头
+      openIpProbe() {
+        this.ipProbeVisible = true;
+      },
+      // 直接把看到的头填进"真实IP头名"，省得手打错
+      useProbeHeader(name) {
+        this.formData.ip_real_header = name;
+        if (['header', 'cdn_preset'].indexOf(this.formData.ip_source_mode) < 0) {
+          this.formData.ip_source_mode = 'header';
+        }
+        this.ipProbeVisible = false;
+        this.$message.success(this.$t('page.host.ip_probe_used_header'));
+      },
+      // 读全局「获取访客IP头信息」，用于兼容模式下回显"本站实际沿用的是什么"
+      loadGlobalProxyHeader() {
+        get_detail_by_item_api({ item: 'gwaf_proxy_header' })
+          .then((res) => {
+            if (res.code === 0 && res.data) {
+              this.globalProxyHeader = (res.data.value || '').trim();
+            }
+          })
+          .catch((e) => { console.log(e); });
+      },
+      goSystemConfig() {
+        const route = this.$router.resolve({ name: 'SystemConfig' });
+        window.open(route.href, '_blank');
+      },
       // 切换 Tab 横向/竖向布局，偏好持久化并通知父级调整弹窗宽度
       toggleTabPlacement() {
         this.tabPlacement = this.tabPlacement === 'left' ? 'top' : 'left';
@@ -1434,6 +1707,7 @@
             postdata['is_trans_back_domain'] = Number(postdata['is_trans_back_domain']);
             postdata['is_enable_http_auth_base'] = Number(postdata['is_enable_http_auth_base']);
             postdata['response_time_out'] = Number(postdata['response_time_out']);
+            postdata['is_enable_response_buffering'] = Number(postdata['is_enable_response_buffering']);
             postdata['insecure_skip_verify'] = Number(postdata['insecure_skip_verify']);
             postdata['log_only_mode'] = Number(postdata['log_only_mode']);
             
@@ -1535,6 +1809,15 @@
               allowed_origins: this.csrfConfigData.allowed_origins || '',
               allow_empty_ref: parseInt(this.csrfConfigData.allow_empty_ref, 10) || 0,
               exclude_paths: this.csrfConfigData.exclude_paths || '',
+            });
+
+            // 处理统一访问认证(Access 模式)配置
+            postdata['access_json'] = JSON.stringify({
+              mode: parseInt(this.accessConfigData.mode, 10) || 0,
+              exclude_paths: this.accessConfigData.exclude_paths || '',
+              require_otp: parseInt(this.accessConfigData.require_otp, 10) || 0,
+              unauth_action: this.accessConfigData.unauth_action || '',
+              allow_ip_group_code: this.accessConfigData.allow_ip_group_code || '',
             });
 
             // 处理网页防篡改配置
@@ -1662,6 +1945,20 @@
 .host-tabs-wrapper--left >>> .t-tabs__header::-webkit-scrollbar-button,
 .host-tabs-wrapper--left >>> .t-tabs__content::-webkit-scrollbar-button {
   display: none;
+}
+.ip-probe-entry {
+  margin-top: 4px;
+}
+.ip-source-block {
+  /* t-form-item 内容区是 flex 行，这里独占一整行并让内部元素纵向排布，
+     否则下拉框/说明/提示条会被挤成一列一列的窄条 */
+  flex: 1 1 100%;
+  min-width: 0;
+  width: 100%;
+}
+.ip-source-scope {
+  margin-top: 8px;
+  max-width: 620px;
 }
 .host-form-ip-mode-help-icon {
   margin-left: 6px;

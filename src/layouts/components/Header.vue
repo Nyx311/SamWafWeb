@@ -4,12 +4,26 @@
   <div :class="layoutCls">
     <t-dialog width="600px" :visible.sync="update_visible" :header="$t('topNav.update.has_new_version')">
       <template #confirmBtn>
-        <t-button :theme="update_new_ver && update_new_ver.toLowerCase().includes('beta') ? 'danger' : 'warning'" @click="handleConfirmUpdate">
+        <!-- 容器环境：应用内升级会在容器重建后回退，这里不给"确认更新"，只给文档入口 -->
+        <t-link v-if="!self_update_allowed" theme="primary" underline
+                href="https://doc.samwaf.com/quickstart/Update.html" target="_blank">
+          {{$t('topNav.update.container_doc_link')}}
+        </t-link>
+        <t-button v-else :theme="update_new_ver && update_new_ver.toLowerCase().includes('beta') ? 'danger' : 'warning'" @click="handleConfirmUpdate">
           {{$t('topNav.update.confirm_update')}}
         </t-button>
       </template>
 
-      <t-alert theme="warning">
+      <t-alert v-if="!self_update_allowed" theme="error" :title="$t('topNav.update.container_blocked_title')">
+        <template #message>
+          <div>{{ $t('topNav.update.container_blocked_tips', { container: container_type || 'container' }) }}</div>
+          <div style="margin-top:8px"><strong>{{ $t('topNav.update.container_howto_label') }}</strong></div>
+          <pre style="margin:4px 0;padding:8px;background:rgba(0,0,0,.05);border-radius:4px;white-space:pre-wrap">docker compose pull
+docker compose up -d</pre>
+          <div>{{ $t('topNav.update.container_howto_tips') }}</div>
+        </template>
+      </t-alert>
+      <t-alert v-else theme="warning">
           <template #message>
             {{$t('topNav.update.update_danger_tips')}}
           </template>
@@ -86,12 +100,10 @@
       <menu-content v-show="layout !== 'side'" class="header-menu" :navData="menu" />
       <template #operations>
         <div class="operations-container">
-          <!-- 搜索框 -->
-          <search layout="top" />
-
           <!-- 系统监控 -->
           <system-monitor @open-wechat="wechat_visible = true" />
-
+          <!-- 搜索框 -->
+          <search layout="top" />
           <!-- 全局通知 -->
           <notice />
           <!-- 版本说明 -->
@@ -108,7 +120,6 @@
               </span>
             </t-button>
           </t-tooltip>
-
           <t-tooltip placement="bottom" :content="$t('topNav.wechat')">
             <t-button theme="default" shape="square" variant="text" @click="openWechat">
               <LogoWechatStrokeIcon />
@@ -124,18 +135,30 @@
               <help-circle-icon />
             </t-button>
           </t-tooltip>
-          <t-select v-model="langValue"
-                    placeholder="SelectLanguage"
-                    @change="changeLangEvent"  style="width: 150px; display: inline-block" title="Select Language">
-            <t-option  v-for="(item, index) in langOptions"
-                       :key="index"
-                       :label="item.label"
-                       :value="item.value"/>
-          </t-select>
-          <t-button theme="warning" @click="changeServer" v-if="hasClientServer">
-            <template #icon><add-icon /></template>
-            {{ $t('topNav.current_server')}} {{ current_server.client_server_name }}
-          </t-button>
+          <t-dropdown :min-column-width="120" trigger="click">
+            <template #dropdown>
+              <t-dropdown-menu>
+                <t-dropdown-item
+                  v-for="item in langOptions"
+                  :key="item.value"
+                  :value="item.value"
+                  :active="item.value === langValue"
+                  @click="changeLangEvent(item.value)"
+                >
+                  {{ item.label }}
+                </t-dropdown-item>
+              </t-dropdown-menu>
+            </template>
+            <t-button
+              theme="default"
+              shape="square"
+              variant="text"
+              class="lang-btn"
+              :title="$t('common.language')"
+            >
+              <translate-icon />
+            </t-button>
+          </t-dropdown>
           <t-dropdown :min-column-width="125" trigger="click">
             <template #dropdown>
               <t-dropdown-menu>
@@ -198,10 +221,10 @@
     MailIcon,
     NotificationErrorIcon,
     ArrowUpDownCircleIcon,
-    AddIcon,
     LogoWechatStrokeIcon,
     RollbackIcon,
-    LockOnIcon
+    LockOnIcon,
+    TranslateIcon
   } from 'tdesign-icons-vue';
   import {
     prefix
@@ -238,10 +261,10 @@
       MailIcon,
       NotificationErrorIcon,
       ArrowUpDownCircleIcon,
-      AddIcon,
       LogoWechatStrokeIcon,
       RollbackIcon,
-      LockOnIcon
+      LockOnIcon,
+      TranslateIcon
     },
     props: {
       theme: String,
@@ -283,12 +306,14 @@
         update_visible:false,
         update_new_ver:"",
         update_desc:"",
+        /**运行环境：容器类型(空=非容器)与是否允许应用内升级。
+         * 容器里升级只对当前容器有效，容器重建就回退到镜像版本，而数据库回不去，
+         * 所以容器环境下后端会直接拒绝升级，前端这里换成镜像更新指引。**/
+        container_type:"",
+        self_update_allowed:true,
         current_account:"not login",
         /**微信二维码对话框**/
         wechat_visible: false, 
-        /**控制中心相关**/
-        hasClientServer:false,
-        current_server:"",
         /**版本回退**/
         rollback_visible: false,
         rollback_loading: false,
@@ -354,40 +379,21 @@
     methods: {
       // 切换语言
       changeLangEvent(value, context) {
-        switch (value) {
-          case "zh_CN":
-            this.langValue = value;
-            this.$i18n.locale = this.langValue;
-            localStorage.setItem("lang",this.langValue)
-            break;
-          case "en_US":
-            this.langValue = value;
-            this.$i18n.locale = this.langValue;
-            localStorage.setItem("lang",this.langValue)
-            break;
-          default:
-            break;
-        }
+        // 兼容 t-dropdown-item 的载荷：可能是字符串，也可能是 option 对象（{ value }）
+        const lang = typeof value === 'string' ? value : (value && value.value) || '';
+        if (lang !== 'zh_CN' && lang !== 'en_US') return;
+        this.langValue = lang;
+        this.$i18n.locale = lang;
+        localStorage.setItem('lang', lang);
         location.reload(); // 刷新页面
       },
       //init
       init(){
         //帐号初始化
         this.current_account = localStorage.getItem("current_account")
-        //管控初始化
-        if(localStorage.getItem("current_server")){
-          this.hasClientServer = true
-          this.current_server = JSON.parse(localStorage.getItem("current_server"))
-        }else{
-          this.hasClientServer = false
-        }
         //多语言
         this.langValue = localStorage.getItem("lang") || "zh_CN"
 
-      },
-      //切换服务器
-      changeServer(){
-        this.$router.push('/center/CenterManager');
       },
       toggleSettingPanel() {
         this.$store.commit('setting/toggleSettingPanel', true);
@@ -453,6 +459,9 @@
               that.hasNewVersion = true
               that.update_new_ver = resdata.data.version_new
               that.update_desc = resdata.data.version_desc
+              that.container_type = resdata.data.container || ""
+              // 老后端没有这个字段时按"允许"处理，避免升级入口被误屏蔽
+              that.self_update_allowed = resdata.data.self_update_allowed !== false
               if(method =="manual"){
                 that.update_visible = true
               }else{
@@ -556,6 +565,11 @@
       handleDoUpdate(){
           //处理升级
           let that = this;
+          // 容器环境后端会直接拒绝，这里先拦一道，避免无谓请求和误导性的 loading
+          if (!that.self_update_allowed) {
+            that.$message.warning(that.$t('topNav.update.container_blocked_title'));
+            return;
+          }
           that.isUpdateloading = true;
           // 检查是否为beta版本，如果是则添加渠道参数
           const params = that.update_new_ver && that.update_new_ver.toLowerCase().includes('beta')
@@ -605,19 +619,40 @@
     }
 
     .t-button {
-      margin: 0 8px;
+      margin: 0 4px;
 
       &.header-user-btn {
-        margin: 0;
+        margin: 0 0 0 12px;
       }
     }
 
+    // 方形图标按钮：统一 36px 圆角方块 + 精致 hover
+    .t-button--shape-square {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      transition: background-color 0.2s ease, color 0.2s ease, transform 0.15s ease;
+    }
+
     .t-icon {
-      font-size: 20px;
+      font-size: 18px;
 
       &.general {
         margin-right: 16px;
       }
+    }
+  }
+
+  // 用户入口：胶囊
+  .header-user-btn {
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 20px;
+    border: 1px solid var(--td-component-stroke);
+
+    .header-user-avatar {
+      font-size: 20px;
+      color: var(--td-brand-color);
     }
   }
 

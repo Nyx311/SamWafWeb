@@ -1,6 +1,6 @@
 import {
   UserSafetyIcon, SystemSettingIcon, UsergroupIcon, SystemLogIcon, ApplicationIcon, LightingCircleIcon,
-  ServerIcon, ForkIcon, NotificationIcon, CloudIcon
+  ServerIcon, ForkIcon, NotificationIcon, CloudIcon, UserCircleIcon
 } from 'tdesign-icons-vue';
 import Layout from '@/layouts/index.vue';
 
@@ -51,6 +51,13 @@ export default [
         name: 'WafIpBlockList',
         component: () => import('@/pages/waf/ipblock/index.vue'),
         meta: { title: 'menu.host.deny_ip' },
+
+      },
+      {
+        path: 'wafipgroup',
+        name: 'WafIpGroup',
+        component: () => import('@/pages/waf/ipgroup/index.vue'),
+        meta: { title: 'menu.host.ip_group' },
 
       },
       {
@@ -121,6 +128,20 @@ export default [
         name: 'WafFirewallIPBlock',
         component: () => import('@/pages/waf/firewall_ipblock/index.vue'),
         meta: { title: 'menu.host.firewall_ip_block' },
+
+      },
+      {
+        path: 'wafThreatIP',
+        name: 'WafThreatIP',
+        component: () => import('@/pages/waf/threatip/index.vue'),
+        meta: { title: 'menu.host.threat_ip' },
+
+      },
+      {
+        path: 'wafCDNIP',
+        name: 'WafCDNIP',
+        component: () => import('@/pages/waf/cdnip/index.vue'),
+        meta: { title: 'menu.host.cdn_ip' },
 
       },
       {
@@ -218,6 +239,35 @@ export default [
     ],
   },
   {
+    // 统一访问认证(Access 模式)自成一个菜单组：它是一套完整的访客身份体系
+    // （账号 / 策略 / 会话 / 审计），与「网站防护」里那些按站点配的防护规则不是一类东西。
+    path: '/waf-access',
+    name: 'wafaccess',
+    component: Layout,
+    redirect: '/waf-access/wafaccessconfig',
+    meta: { title: 'menu.access.parent_title', icon: UserCircleIcon },
+    children: [
+      {
+        path: 'wafaccessconfig',
+        name: 'WafAccessConfig',
+        component: () => import('@/pages/waf/access_config/index.vue'),
+        meta: { title: 'menu.access.config' },
+      },
+      {
+        path: 'wafaccessaccount',
+        name: 'WafAccessAccount',
+        component: () => import('@/pages/waf/access_account/index.vue'),
+        meta: { title: 'menu.access.account' },
+      },
+      {
+        path: 'wafaccesssession',
+        name: 'WafAccessSession',
+        component: () => import('@/pages/waf/access_session/index.vue'),
+        meta: { title: 'menu.access.session' },
+      },
+    ],
+  },
+  {
     path: '/account',
     name: 'account',
     component: Layout,
@@ -235,6 +285,12 @@ export default [
         name: 'AccountLog',
         component: () => import('@/pages/waf/accountlog/index.vue'),
         meta: { title: 'menu.account.account_log_title' },
+      },
+      {
+        path: 'LoginHistory',
+        name: 'LoginHistory',
+        component: () => import('@/pages/waf/login_history/index.vue'),
+        meta: { title: 'menu.account.login_history_title' },
       },
       {
         path: 'OTP',
@@ -261,6 +317,14 @@ export default [
         }
       },
       {
+        path: 'HostGuard',
+        name: 'HostGuard',
+        component: () => import('@/pages/waf/hostguard/index.vue'),
+        meta: {
+          title: 'menu.system.host_guard_title',
+        }
+      },
+      {
         path: 'FileManage',
         name: 'FileManage',
         component: () => import('@/pages/waf/filemanage/index.vue'),
@@ -283,10 +347,22 @@ export default [
         meta: { title: 'menu.system.system_log_title' },
       },
       {
+        path: 'wafaccessaudit',
+        name: 'WafAccessAudit',
+        component: () => import('@/pages/waf/access_audit/index.vue'),
+        meta: { title: 'menu.system.security_audit_title' },
+      },
+      {
         path: 'SystemConfig',
         name: 'SystemConfig',
         component: () => import('@/pages/waf/systemconfig/index.vue'),
         meta: { title: 'menu.system.system_config_title' },
+      },
+      {
+        path: 'UpgradeNotice',
+        name: 'UpgradeNotice',
+        component: () => import('@/pages/waf/upgradenotice/index.vue'),
+        meta: { title: 'menu.system.upgrade_notice_title' },
       },
       {
         path: 'PrivateInfo',
@@ -317,6 +393,11 @@ export default [
         name: 'RumtimeSysteminfo',
         component: () => import('@/pages/waf/sysruntime/index.vue'),
         meta: { title: 'menu.system.system_runtime_title' },
+      }, {
+        path: 'RunDiagnostic',
+        name: 'RunDiagnostic',
+        component: () => import('@/pages/waf/diagnostic/index.vue'),
+        meta: { title: 'menu.system.diagnostic_title' },
       }, {
         path: 'OneKeyMod',
         name: 'OneKeyMod',
@@ -360,22 +441,6 @@ export default [
         component: () => import('@/pages/waf/notify_log/index.vue'),
         meta: { title: 'menu.notify.log_title' },
       },
-    ],
-  },
-
-  {
-    path: '/center',
-    name: 'center',
-    component: Layout,
-    redirect: '/center',
-    meta: { title: 'menu.pc.parent_title', icon: ServerIcon },
-    children: [
-      {
-        path: 'CenterManager',
-        name: 'CenterManager',
-        component: () => import('@/pages/waf/center/index.vue'),
-        meta: { title: 'menu.pc.pc_list_title' },
-      }
     ],
   },
 

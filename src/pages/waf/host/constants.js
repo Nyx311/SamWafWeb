@@ -30,12 +30,14 @@ export const INITIAL_DATA = {
   http_auth_base_type: "authorization",//认证类型 authorization(默认Basic Auth) custom(自定义页面)
   http_auth_path_prefix: "",//HTTP认证路径前缀，空值时使用默认路径或后端自动生成
   response_time_out: "60",//响应超时时间单位秒
+  is_enable_response_buffering: "1",//响应缓冲 1开启(默认) 0关闭(类似 nginx proxy_buffering off)
   insecure_skip_verify: "0",//是否跳过后端https证书有效性验证
   anti_leech_json: '{"is_enable_anti_leech":0,"file_types":"gif|jpg|jpeg|png|bmp|swf","valid_referers":"none;server_names","action":"block","redirect_url":""}', // 新增防盗链配置
   cache_json: '{"is_enable_cache":0,"cache_location":"memory","cache_dir":"./data/cache","max_file_size_mb":0,"max_memory_size_mb":0}', // 新增缓存配置
   response_compress_json: '{"is_enable":0,"prefer":"zstd_first","min_length":256,"include_types":"","include_extensions":"","exclude_extensions":"","exclude_paths":"","compress_when_static_assist":0}',
   cookie_security_json: '{"is_enable":0,"http_only":1,"secure":2,"same_site":"Lax","exclude_cookies":""}',
   csrf_json: '{"is_enable":0,"protect_methods":"POST,PUT,DELETE,PATCH","allowed_origins":"","allow_empty_ref":1,"exclude_paths":""}',
+  access_json: '{"mode":0,"exclude_paths":"","require_otp":0,"unauth_action":"","allow_ip_group_code":""}',
   tamper_json: '{"is_enable":0,"action":"replace","max_size_kb":1024}',
   upload_security_json: '{"is_enable":0,"check_ext":0,"ext_blacklist":"","check_content":0,"check_magic":0,"check_size":0,"max_size_kb":10240,"over_limit_action":"block","include_paths":"","exclude_paths":""}',
   static_site_json: '{"is_enable_static_site":0,"static_site_path":"","static_site_prefix":"/","sensitive_paths":"/etc/passwd,/etc/shadow,/etc/group,/etc/gshadow,/etc/hosts,/etc/hostname,/etc/resolv.conf,/etc/ssh/,/var/log/,/.ssh/,/.bash_history,/.profile,/.bashrc,/etc/crontab,/var/spool/cron/,/etc/apache2/,/etc/nginx/,/etc/httpd/,/var/www/,/usr/share/,/var/tmp/,/var/run/,c:\\windows\\,c:\\program files\\,c:\\program files (x86)\\,c:\\users\\,c:\\documents and settings\\,c:\\windows\\system32\\,c:\\windows\\syswow64\\,c:\\boot.ini,c:\\autoexec.bat,c:\\config.sys,\\windows\\,\\program files\\,\\program files (x86)\\,\\users\\,\\documents and settings\\,\\windows\\system32\\,\\windows\\syswow64\\,boot.ini,autoexec.bat,config.sys,ntuser.dat,pagefile.sys,hiberfil.sys,swapfile.sys","sensitive_extensions":"key,.pem,.crt,.p12,.pfx,.jks,.bak,.backup,.old,.orig,.save,.sql,.db,.sqlite,.mdb,.env,.htaccess,.htpasswd,.git,.svn,.hg,.bzr,.DS_Store,Thumbs.db,desktop.ini,.tmp,.temp,.lock,.pid","allowed_extensions":".html,.htm,.css,.js,.json,.png,.jpg,.jpeg,.gif,.svg,.ico,.webp,.pdf,.txt,.md,.xml,.woff,.woff2,.ttf,.eot,.mp4,.webm,.ogg,.mp3,.wav,.zip,.tar,.gz,.rar","sensitive_patterns":"(?i)\\.git(/|\\\\),(?i)\\.svn(/|\\\\),(?i)\\.env,(?i)database\\.(php|xml|json|yaml|yml),(?i)(backup|dump|export)\\.(sql|db|tar|zip|gz),(?i)(id_rsa|id_dsa|id_ecdsa|id_ed25519),(?i)\\.ssh(/|\\\\).*,(?i)(access|error|debug)\\.log,(?i)web\\.config,(?i)phpinfo\\.php","security_headers":[]}', // 新增静态网站配置
@@ -179,6 +181,17 @@ export const INITIAL_UPLOAD_SECURITY = {
 };
 
 // CSRF 防护初始化数据（is_enable/allow_empty_ref 为字符串便于 t-radio 绑定；protect_methods 为数组便于 t-checkbox-group 绑定）
+// 统一访问认证(Access 模式)站点级配置初始化数据
+// mode 用字符串："0" 继承全局 / "1" 强制开启 / "2" 强制关闭。
+// 用字符串是因为 TDesign 的 t-radio 是严格比较，数字 0 匹配不上 value="0"。
+export const INITIAL_ACCESS = {
+  mode: "0",
+  exclude_paths: "",
+  require_otp: "0",
+  unauth_action: "",
+  allow_ip_group_code: "",
+};
+
 export const INITIAL_CSRF = {
   is_enable: "0",
   protect_methods: ["POST", "PUT", "DELETE", "PATCH"],

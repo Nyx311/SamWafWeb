@@ -23,15 +23,11 @@
           </t-form>
         </div>
       </t-row>
-      <t-alert theme="info" :message="$t('page.sslorder.alert_message')" close>
-        <template #operation>
-          <t-space>
-            <span @click="handleSslHttpCheck" class="highlight-link">{{ $t('page.sslorder.ssl_http_check_setting')
-            }}</span>
-            <span @click="handleJumpOnlineUrl">{{ $t('common.online_document') }}</span>
-          </t-space>
+      <help-block :summary="$t('page.sslorder.alert_message')" doc="guide/SSL">
+        <template #actions>
+          <span @click="handleSslHttpCheck" class="highlight-link">{{ $t('page.sslorder.ssl_http_check_setting') }}</span>
         </template>
-      </t-alert>
+      </help-block>
       <div class="table-container">
         <t-table :columns="columns" :data="data" :rowKey="rowKey" :verticalAlign="verticalAlign" :hover="hover"
           :pagination="pagination" :selected-row-keys="selectedRowKeys" :loading="dataLoading"
@@ -619,7 +615,7 @@ export default Vue.extend({
       sslHttpCheckFormData: {
         item: 'sslhttp_check',
         value: '1',
-        remarks: '证书文件验证方式是否要严控后端.well-known响应代码'
+        remarks: '证书文件验证：本地挑战文件始终优先；本项仅控制本地无挑战文件且后端返回非404/301/302时是否写告警'
       },
       sslHttpCheckRules: {
         item: [{ required: true, message: this.$t('page.systemconfig.label_configuration_item'), type: 'error' }],
@@ -1104,7 +1100,7 @@ export default Vue.extend({
           this.sslHttpCheckFormData = {
             item: 'sslhttp_check',
             value: '1',
-            remarks: '证书文件验证方式是否要严控后端.well-known响应代码'
+            remarks: '证书文件验证：本地挑战文件始终优先；本项仅控制本地无挑战文件且后端返回非404/301/302时是否写告警'
           };
         }
         this.sslHttpCheckDialogVisible = true;
@@ -1481,9 +1477,6 @@ export default Vue.extend({
     onCancel() {
       this.confirmVisible = false;
       this.deleteIdx = -1;
-    },
-    handleJumpOnlineUrl() {
-      window.open(this.samwafglobalconfig.getOnlineUrl()+"/guide/SSL.html");
     },
     onClickCloseBtn() {
       this.addFormVisible = false;

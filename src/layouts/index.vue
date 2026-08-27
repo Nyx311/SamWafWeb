@@ -1,54 +1,14 @@
 <template>
   <div>
+    <!-- HTTP 访问提示条：放在三种布局之外，side/top/mix 都能显示 -->
+    <insecure-banner />
     <template v-if="setting.layout === 'side'">
       <t-layout key="side">
         <t-aside><layout-sidebar /></t-aside>
         <t-layout>
           <t-header><layout-header /></t-header>
           <t-content><layout-content /></t-content>
-          <t-drawer :visible.sync="aiChatBoxVisible" :closeBtn="true" size="500px" :header="$t('page.gpt.assistant')">
-            <div ref="chatContainer" class="chat-container">
-              <div v-for="(item, index) in questionList" :key="index"
-                   class="message-wrapper" :class="item.role">
-                <div class="message-bubble">
-                  <div class="avatar">
-                    <user-icon v-if="item.role === 'user'" name="user"  > </user-icon>
-                    <logo-android-icon v-else name="robot"/>
-                  </div>
-                  <div class="content">
-                    <div v-html="convertMarkdown(item.content)" class="text"></div>
-                    <div v-if="item.loading" class="loading">...</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <template #footer>
-              <div class="input-area">
-                <t-textarea
-                  v-model="inputMessage"
-                  :placeholder="$t('page.gpt.chat.chat_placeholder')"
-                  name="description"
-                  :autosize="{ minRows: 3,maxRows: 4 }"
-                  :disabled="isStreaming"
-                  @enter="!isStreaming && sendMessage()">
-                </t-textarea>
-                <t-button v-if="!isStreaming" theme="primary" @click="sendMessage">
-                  {{ $t('page.gpt.chat.chat_send') }}
-                </t-button>
-                <t-button v-else theme="danger" variant="outline" @click="stopStreaming">
-                  {{ $t('page.gpt.chat.chat_stop') }}
-                </t-button>
-              </div>
-            </template>
-          </t-drawer>
-
-          <t-sticky-tool :style="{ position: 'fixed', right: '20px', overflow: 'hidden', height: '70px' }"
-                         @click="openChat">
-            <t-sticky-item :label="$t('page.gpt.assistant')" :icon="renderChatIcon"/>
-          </t-sticky-tool>
         </t-layout>
-
       </t-layout>
     </template>
     <template v-else-if="setting.layout === 'top'">
@@ -68,24 +28,25 @@
       </t-layout>
     </template>
     <setting />
+    <!-- AI 助手放在布局外层：三种布局(side/top/mix)下都可用 -->
+    <ai-assistant />
   </div>
 </template>
 
 <script lang="ts">
-import Vue , { h }  from 'vue'; //import Vue , { h }  from 'vue';
+import Vue from 'vue';
 import { mapGetters } from 'vuex';
-import { ChatIcon, AddIcon, QrcodeIcon,UserIcon, LogoAndroidIcon  } from 'tdesign-icons-vue';
-import { marked } from 'marked';
+import { NotifyPlugin } from 'tdesign-vue';
 
-
+import InsecureBanner from './components/InsecureBanner.vue';
 import LayoutHeader from './components/LayoutHeader.vue';
 import LayoutContent from './components/LayoutContent.vue';
 import LayoutSidebar from './components/LayoutSidebar.vue';
+import AiAssistant from './components/AiAssistant.vue';
 import Setting from './setting.vue';
 
 import { prefix } from '@/config/global';
 import { SettingType } from '@/interface';
-import { fetchChatStream } from '@/utils/eventSource';
 
 import '@/style/layout.less';
 const name = `${prefix}-base-layout`;
@@ -93,32 +54,12 @@ const name = `${prefix}-base-layout`;
 export default Vue.extend({
   name,
   components: {
+    InsecureBanner,
     LayoutHeader,
     LayoutContent,
     LayoutSidebar,
     Setting,
-    ChatIcon,
-    AddIcon,
-    QrcodeIcon,
-    UserIcon,
-    LogoAndroidIcon,
-  },
-  data() {
-    return {
-      aiChatBoxVisible:false,
-      questionList: [] as Array<{
-        role: 'user' | 'assistant';
-        content: string;
-        loading?: boolean;
-        //unimportant?: boolean | false;//后端是否关注此类信息
-      }>,
-      inputMessage: '',
-      loading: false,
-      token: "your_token",  // 你需要动态传入token
-      isStreaming: false,          // 是否正在流式输出
-      currentCtrl: null as any,   // AbortController，用于中止流
-      streamAborted: false,       // 标记是用户主动中止（区别于网络错误）
-    };
+    AiAssistant,
   },
   computed: {
     ...mapGetters({
@@ -156,133 +97,89 @@ export default Vue.extend({
     if (localStorage.getItem('tabRouterList')) this.getTabRouterListCache();
     this.$store.commit('tabRouter/appendTabRouterList', { path, title, name, isAlive: true });
 
-    let that = this
-    that.$bus.$on("sendAi", (e) => {
-      console.log('消息总线 来自其他内容 ', e)
-      that.clearMessage()
-      that.aiChatBoxVisible = true;
-      that.inputMessage= e
-      that.sendMessage()
-
-    })
-
+    this.showLoginNotice();
   },
   methods: {
-    // 判断内容是否是 Markdown
-    isMarkdown(content) {
-      // 简单检查 Markdown 语法（例如 # 开头）
-      return true //content.startsWith('#');
-    },
-    // 将 Markdown 转换为 HTML
-    convertMarkdown(content) {
-      return this.$purifyHtml(marked.parse(content));
-    },
-    clearMessage(){
-      this.questionList = []
-    },
-    sendMessage() {
-      if (!this.inputMessage.trim()) return;
+    // 登录来源提醒：登录页把响应里的 login_notice 存进 sessionStorage，进入布局后在右下角弹一次。
+    // 读完即删，保证刷新页面不会反复弹。
+    showLoginNotice() {
+      const raw = sessionStorage.getItem('login_notice');
+      if (!raw) return;
+      sessionStorage.removeItem('login_notice');
 
-      const userMessage = this.inputMessage;
-      this.inputMessage = '';
-
-      // 添加用户消息
-      this.questionList.push({
-        role: 'user',
-        content: userMessage,
-      });
-
-      // 添加机器人消息占位
-      this.questionList.push({
-        role: 'assistant',
-        content: '',
-        loading: true,
-      });
-
-      this.askQuestion(userMessage);
-    },
-    askQuestion(q: string) {
-      const ctrl = new AbortController();
-      this.currentCtrl = ctrl;
-      this.isStreaming = true;
-      this.streamAborted = false;
-      const answerIndex = this.questionList.length - 1;
-
-      fetchChatStream({
-        history: this.questionList,
-        q,
-        ctrl,
-        onSuccess: (assistantMessage) => {
-          const answer = this.questionList[answerIndex];
-          answer.content += assistantMessage.content;
-          this.$set(this.questionList, answerIndex, { ...answer });
-          this.goChatBottom();
-        },
-        onComplete: () => {
-          this.isStreaming = false;
-          this.currentCtrl = null;
-          const answer = this.questionList[answerIndex];
-          if (answer) {
-            answer.loading = false;
-            this.$set(this.questionList, answerIndex, { ...answer });
-            this.goChatBottom();
-          }
-        },
-        onError: (errorMsg) => {
-          this.isStreaming = false;
-          this.currentCtrl = null;
-          const answer = this.questionList[answerIndex];
-          if (this.streamAborted) {
-            // 用户主动中止：保留已输出内容，标记为已停止
-            if (answer) {
-              answer.loading = false;
-              if (!answer.content) answer.content = '_(已中止)_';
-              this.$set(this.questionList, answerIndex, { ...answer });
-              this.goChatBottom();
-            }
-          } else {
-            // 真实错误：在气泡里展示错误，不删消息，让用户看到
-            this.$message.error(errorMsg);
-            if (answer) {
-              answer.loading = false;
-              answer.content = answer.content || ('⚠️ ' + errorMsg);
-              this.$set(this.questionList, answerIndex, { ...answer });
-              this.goChatBottom();
-            }
-          }
-          this.streamAborted = false;
-        },
-      });
-    },
-    stopStreaming() {
-      if (this.currentCtrl) {
-        this.streamAborted = true;     // 先标记，让 onError 知道这是主动中止
-        this.currentCtrl.abort();
-        this.currentCtrl = null;
+      let notice: any = null;
+      try {
+        notice = JSON.parse(raw);
+      } catch (e) {
+        return;
       }
-      this.isStreaming = false;
-    },
+      if (!notice || !notice.current_ip) return;
 
-    goChatBottom() {
-      this.$nextTick(() => {
-        const container = this.$refs.chatContainer as HTMLElement;
-        if (container) {
-          //console.log('chatContainer:', container); // 检查是否能正确引用
-          container.scrollTop = container.scrollHeight;
-        } else {
-          //console.error('chatContainer reference not found');
-        }
-      });
-    },
-
-    openChat(e: any) {
-      console.log("aichat e=",e)
-      if (e.item?.label === this.$t('page.gpt.assistant') ) {
-        this.aiChatBoxVisible = true;
+      const dash = (v: string) => (v && String(v).trim() !== '' ? v : '-');
+      const rows: Array<[string, string]> = [
+        [this.$t('page.login_notice.current_ip') as string, dash(notice.current_ip)],
+        [this.$t('page.login_notice.current_area') as string, dash(notice.current_area)],
+        [this.$t('page.login_notice.current_time') as string, dash(notice.current_time)],
+      ];
+      if (notice.is_changed) {
+        rows.push([this.$t('page.login_notice.last_ip') as string, dash(notice.last_ip)]);
+        rows.push([this.$t('page.login_notice.last_area') as string, dash(notice.last_area)]);
+        rows.push([this.$t('page.login_notice.last_time') as string, dash(notice.last_time)]);
       }
-    },
-    renderChatIcon: function (createElement) {
-      return createElement(ChatIcon);
+
+      let tipKey = 'page.login_notice.same_tip';
+      if (notice.is_changed) tipKey = 'page.login_notice.changed_tip';
+      else if (notice.is_first) tipKey = 'page.login_notice.first_tip';
+
+      // 全部用 h() 构造文本节点，IP/归属地这些外部来源的字符串不会被当成 HTML 解析
+      const content = (h: any) =>
+        h('div', { style: 'font-size:13px;line-height:22px;' }, [
+          ...rows.map(([label, value]) =>
+            h('div', { style: 'display:flex;gap:8px;' }, [
+              h('span', { style: 'flex:0 0 84px;color:var(--td-text-color-secondary);' }, label),
+              h('span', { style: 'flex:1;word-break:break-all;' }, value),
+            ]),
+          ),
+          h(
+            'div',
+            {
+              style: `margin-top:8px;${notice.is_changed ? 'color:var(--td-warning-color);' : 'color:var(--td-text-color-secondary);'}`,
+            },
+            this.$t(tipKey) as string,
+          ),
+        ]);
+
+      const options: any = {
+        title: this.$t(notice.is_changed ? 'page.login_notice.title_changed' : 'page.login_notice.title_normal'),
+        content,
+        placement: 'bottom-right',
+        // 来源变化是要人看到并判断的，不自动消失，必须用户自己关；
+        // 一致时 6 秒后自动关掉，别挡住页面
+        duration: notice.is_changed ? 0 : 6000,
+        closeBtn: true,
+      };
+
+      // instance 在 footer 渲染之后才赋值，但点击一定发生在渲染之后，闭包里拿得到
+      let instance: any = null;
+      if (notice.is_changed) {
+        options.footer = (h: any) =>
+          h('div', { style: 'display:flex;justify-content:flex-end;' }, [
+            h(
+              't-button',
+              {
+                props: { theme: 'primary', variant: 'text', size: 'small' },
+                on: {
+                  click: () => {
+                    if (instance) NotifyPlugin.close(instance);
+                    this.$router.push('/account/LoginHistory').catch(() => {});
+                  },
+                },
+              },
+              this.$t('page.login_notice.view_history') as string,
+            ),
+          ]);
+      }
+      instance = notice.is_changed ? NotifyPlugin.warning(options) : NotifyPlugin.success(options);
     },
     getTabRouterListCache() {
       this.$store.commit('tabRouter/initTabRouterList', JSON.parse(localStorage.getItem('tabRouterList')));
@@ -290,83 +187,6 @@ export default Vue.extend({
     setTabRouterListCache() {
       localStorage.setItem('tabRouterList', JSON.stringify(this.tabRouterList));
     },
-    handleClick(context) {
-      console.log('click', context);
-    },
-    handleHover(context) {
-      console.log('hover', context);
-    },
-
   },
 });
 </script>
-<style scoped>
-.chat-container {
-  height: 60vh;
-  overflow-y: auto;
-  padding: 20px;
-  background: var(--td-bg-color-container);
-}
-
-.message-wrapper {
-  display: flex;
-  margin: 12px 0;
-}
-
-.message-wrapper.user {
-  justify-content: flex-end;
-}
-
-.message-bubble {
-  max-width: 80%;
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.message-wrapper.user .message-bubble {
-  flex-direction: row-reverse;
-}
-
-.avatar {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--td-bg-color-component);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.content {
-  max-width: calc(100% - 44px);
-}
-
-.text {
-  padding: 12px;
-  border-radius: 6px;
-  background: var(--td-bg-color-component);
-  color: var(--td-text-color-primary);
-  word-break: break-word;
-}
-
-.message-wrapper.user .text {
-  background: var(--td-brand-color);
-  color: var(--td-text-color-anti);
-}
-
-.loading {
-  color: var(--td-text-color-secondary);
-  font-size: 24px;
-  padding: 12px;
-}
-
-.input-area {
-  display: flex;
-  gap: 12px;
-  padding: 20px;
-  background: var(--td-bg-color-container);
-  border-top: 1px solid var(--td-component-border);
-}
-</style>

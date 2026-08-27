@@ -22,10 +22,20 @@ import Vue from 'vue';
 import config from '@/config/style';
 import websocket from "@/utils/websocket.js";
 import { DialogPlugin } from 'tdesign-vue';
-import  {AesDecrypt} from './utils/usuallytool'
+import  {ensureSecSession, currentKeyId, decryptIncoming} from './utils/seccrypto'
 import { v4 as uuidv4 } from 'uuid'
 import { clearLocalStorageExceptPreserved, saveCurrentUrl } from '@/constants';
 const env = import.meta.env.MODE || 'development';
+
+// WebSocket 断线重连的指数退避参数。
+// 后端会主动踢掉写超时(5s)/读超时(90s)的死连接，掉线后固定等 10s 再连的话，
+// 这段空窗期内的即时通知(IP封禁、操作结果等)是收不到的——服务端不补发。
+// 所以改成 1s 起、每次翻倍、封顶 10s：偶发断开几乎无感，后端真挂了也不会疯狂重试。
+const WS_RECONNECT_BASE_DELAY = 1000;
+const WS_RECONNECT_MAX_DELAY = 10000;
+// 连接活过这个时长才算「连上过」，重连间隔才复位。
+// 否则鉴权失败(-999)这类「一连上就被踢」的场景会退化成 1s 一次的死循环。
+const WS_STABLE_THRESHOLD = 30000;
 
 export default Vue.extend({
   computed: {
@@ -36,7 +46,11 @@ export default Vue.extend({
   data() {
     return {
       ws: null,
+      wsConnecting: false,
       disConnectTimer: null,
+      reconnectDelay: WS_RECONNECT_BASE_DELAY,
+      wsOpenedAt: 0,
+      wsGeneration: 0,
       mydialog: null,
       showEmergencyDialog: false,
       emergencyDialogShown: false,
@@ -99,8 +113,20 @@ export default Vue.extend({
         if (path) window.location.href = path + '?back=' + encodeURIComponent(window.location.href);
         this.showEmergencyDialog = false;
       },
-      initWebSocket() {
+      async initWebSocket() {
         console.log("log",window.location.host)
+        // 已有连接就别再建：这个判断必须在 await 之前，否则两次调用（created 与一次重连）
+        // 会双双穿过判断各建一条，重蹈「一条广播被同一页面收 N 次」的覆辙
+        if(this.ws || this.wsConnecting) return;
+        this.wsConnecting = true;
+        try {
+          // WebSocket 建连不能带自定义头，会话密钥只能走查询参数；
+          // 握手失败(旧后端/网络异常)时 keyid 为空，后端推送回落 legacy 通道。
+          await ensureSecSession()
+        } finally {
+          this.wsConnecting = false;
+        }
+        const keyid = currentKeyId()
         if(!this.ws) {
         	// url
           const isHttps = window.location.protocol === 'https:';
@@ -109,13 +135,19 @@ export default Vue.extend({
           let url = env=="development"
               ? `ws://127.0.0.1:26666${secPath}/api/v1/ws`
               : `${isHttps ? 'wss' : 'ws'}://${window.location.host}${secPath}/api/v1/ws`;
+          if (keyid) url += `?keyid=${encodeURIComponent(keyid)}`;
+          // 代次：本次连接的身份标记。旧连接的事件迟到时靠它识别并丢弃，
+          // 否则「已废弃连接的 close 事件」会把 this.ws（此时已指向新的活连接）置空并再排一次重连，
+          // 于是又漏出一条连接——线上就是这样一路裂变出十几条并存连接，
+          // 一条广播被同一个页面收 N 次，通知就重复 N 条。
+          const gen = ++this.wsGeneration;
           this.ws = websocket.useWebSocket(
               url,	// url
               localStorage.getItem("access_token"),
-              this.wsOnOpen, // 链接回调
-              this.wsOnMessage,	// 连接成功后处理接口返回信息
-              this.wsOnClose, // 关闭回调
-              this.wsOnError, // 消息通知错误回调
+              () => this.wsOnOpen(gen), // 链接回调
+              (e) => this.wsOnMessage(e, gen),	// 连接成功后处理接口返回信息
+              () => this.wsOnClose(gen), // 关闭回调
+              (e) => this.wsOnError(e, gen), // 消息通知错误回调
               [], // 发送后台的心跳包参数
               30000, // 心跳间隔：30秒（可按需调整）
               false // 关闭工具内部重连，统一由 App.vue 控制
@@ -123,16 +155,48 @@ export default Vue.extend({
         }
 
       },
-      wsOnOpen() {
+      // 是否为当前连接发来的事件；过期连接的一律忽略
+      isCurrentWs(gen) {
+        return gen === this.wsGeneration;
+      },
+      wsOnOpen(gen) {
+        if (!this.isCurrentWs(gen)) return;
         console.log('开始连接')
+        this.wsOpenedAt = Date.now();
       },
-      wsOnError(e) {
-        console.log(e,'消息通知错误回调，重新连接')
-        // 不再主动关闭，避免额外触发 onclose
+      // 统一的重连入口：onerror 与 onclose 都走这里。
+      // 一次断开通常会先后触发 error 和 close 两个事件，靠 disConnectTimer 去重，
+      // 避免像以前那样 error 里立刻重连、close 里又排一次，连出两条连接。
+      scheduleReconnect(gen) {
+        if (!this.isCurrentWs(gen)) return; // 旧连接的迟到事件，不能影响当前连接
+        if (this.disConnectTimer) return;
+
+        // 连接稳定活过一段时间再断，视为偶发掉线，退避间隔复位
+        if (this.wsOpenedAt && Date.now() - this.wsOpenedAt >= WS_STABLE_THRESHOLD) {
+          this.reconnectDelay = WS_RECONNECT_BASE_DELAY;
+        }
+        this.wsOpenedAt = 0;
+        // 显式关掉被丢弃的连接：不关的话它在服务端一直活着、继续收广播，
+        // 页面里它的监听器也还在，就会把同一条通知重复推进 store。
+        // 它迟到的 close 事件会被上面的代次校验挡掉，不会再触发一次重连。
+        try { if (this.ws) this.ws.close(); } catch (_) { /* ignore */ }
         this.ws = null;
-        this.initWebSocket();
+
+        const delay = this.reconnectDelay;
+        console.log(`WebSocket 已断开，${delay}ms 后重连`);
+        this.disConnectTimer = setTimeout(() => {
+          this.disConnectTimer = null;
+          this.initWebSocket();
+        }, delay);
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, WS_RECONNECT_MAX_DELAY);
       },
-      wsOnMessage(e) {
+      wsOnError(e, gen) {
+        console.log(e,'消息通知错误回调，重新连接')
+        this.scheduleReconnect(gen);
+      },
+      wsOnMessage(e, gen) {
+        // 僵尸连接（已被丢弃但服务端还在推）的消息一律丢掉，否则同一条通知会重复入库
+        if (!this.isCurrentWs(gen)) return;
         if(e.data=="pong"){
           console.log('收到心跳包回复')
           return
@@ -144,7 +208,7 @@ export default Vue.extend({
           let msgDataEnstr =wsData.msg_data
 
           //console.log('msgDataEnstr',msgDataEnstr)
-          let tmpSrcContent = AesDecrypt(msgDataEnstr)
+          let tmpSrcContent = decryptIncoming(msgDataEnstr)
          // console.log('tmpSrcContent',tmpSrcContent)
           let msgData = JSON.parse(tmpSrcContent)
           //console.log('msgData',msgData)
@@ -185,6 +249,12 @@ export default Vue.extend({
                this.$store.commit('stats/addStatsData', wsData.msg_data.message_attach);
              }
              return
+          }else if(wsData.msg_cmd_type==="HostGuard"){
+             // 主机防爆破封禁：只广播事件，由「远程防爆破」页面自行决定要不要刷新。
+             // 不在这里弹通知——IP封禁本来就已经走 Info 通道发过一次了，
+             // 再弹一次用户会看到两条一样的消息。
+             this.$bus.$emit('hostguard-ban', wsData.msg_data.message_attach);
+             return
           }
           this.$store.commit('notification/addMsgData', wsData.msg_data);
         }else if(wsData.msg_code==="-999"){
@@ -194,17 +264,10 @@ export default Vue.extend({
           console.log("鉴权失败");
         }
       },
-      wsOnClose() {
+      wsOnClose(gen) {
         console.log('关闭')
-        // 意外关闭之后重新连接
-        if(!this.disConnectTimer) {
-          //this.ws.close();
-          this.ws = null;
-          this.disConnectTimer = setTimeout(() => {
-            this.initWebSocket()
-            this.disConnectTimer = null
-          }, 10000)
-        }
+        // 意外关闭之后重新连接（间隔按指数退避，见 scheduleReconnect）
+        this.scheduleReconnect(gen);
       }
   }
 

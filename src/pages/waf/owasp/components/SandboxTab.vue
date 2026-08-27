@@ -1,6 +1,6 @@
 <template>
   <div>
-    <t-alert theme="info" :message="$t('page.owasp.sandbox.alert_message')" close />
+    <help-block :summary="$t('page.owasp.sandbox.alert_message')" doc="guide/Owasp" />
     <t-row :gutter="16">
       <t-col :span="6">
         <t-form :data="form" :labelWidth="90" @submit="onSubmit">
@@ -483,7 +483,8 @@ export default Vue.extend({
       this.aiDialog.visible = true;
     },
     confirmSendAi() {
-      this.$bus.$emit('sendAi', this.aiDialog.prompt);
+      // 规则解读走 OWASP 规则提示词，不套风险评分格式
+      this.$bus.$emit('sendAi', { q: this.aiDialog.prompt, scene: 'owasp_rule' });
       this.aiDialog.visible = false;
     },
     onDisableRule(row: any) {

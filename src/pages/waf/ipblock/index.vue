@@ -1,5 +1,7 @@
 <template>
   <div>
+    <t-tabs v-model="activeSourceTab" @change="onSourceTabChange">
+    <t-tab-panel value="manual" :label="$t('page.ipblock.tab_manual')">
     <t-card class="list-card-container">
       <t-row justify="space-between">
         <div class="left-operation-container">
@@ -41,11 +43,7 @@
 
         </div>
       </t-row>
-      <t-alert theme="info" :message="$t('page.ipblock.alert_message')" close>
-        <template #operation>
-          <span @click="handleJumpOnlineUrl">{{ $t('common.online_document') }}</span>
-        </template>
-      </t-alert>
+      <help-block :summary="$t('page.ipblock.alert_message')" doc="guide/IPBlack" />
       <div class="table-container">
         <t-table :columns="columns" :data="data" :rowKey="rowKey" :verticalAlign="verticalAlign" :hover="hover"
           :pagination="pagination" :selected-row-keys="selectedRowKeys" :loading="dataLoading"
@@ -55,6 +53,16 @@
 
           <template #host_code="{ row }">
             <span> {{host_dic[row.host_code]}}</span>
+          </template>
+          <template #ip_type="{ row }">
+            <t-tag v-if="row.ip_type === 'group'" theme="primary" variant="light">
+              {{ $t('page.ipblock.entry_type_group') }}
+            </t-tag>
+            <span v-else>{{ $t('page.ipblock.entry_type_ip') }}</span>
+          </template>
+          <template #ip="{ row }">
+            <span v-if="row.ip_type === 'group'">{{ groupLabel(row.group_code) }}</span>
+            <span v-else>{{ row.ip }}</span>
           </template>
           <template #op="slotProps">
             <a class="t-button-link" @click="handleClickEdit(slotProps)">{{ $t('common.edit') }}</a>
@@ -66,20 +74,59 @@
       <router-view></router-view>
       </div>
     </t-card>
+    </t-tab-panel>
+    <t-tab-panel value="sub" :label="$t('page.ipblock.tab_sub_source')">
+      <t-card class="list-card-container">
+        <threat-sub-source-panel ref="subPanel" land="waf" />
+      </t-card>
+    </t-tab-panel>
+    </t-tabs>
 
     <t-dialog :header="$t('common.new')" :visible.sync="addFormVisible" :width="680" :footer="false">
       <div slot="body">
         <t-form :data="formData" ref="form" :rules="rules" @submit="onSubmit" :labelWidth="100">
           <t-form-item :label="$t('page.ipblock.label_website')" name="host_code">
-            <t-select v-model="formData.host_code" clearable filterable :style="{ width: '480px' }">
+            <t-select v-model="formData.host_code" clearable filterable :style="{ width: '480px' }" @change="onHostChange">
               <t-option v-for="(item, index) in host_dic" :value="index" :label="item"
                 :key="index">
                 {{ item }}
               </t-option>
             </t-select>
           </t-form-item>
-          <t-form-item :label="$t('page.ipblock.label_ip')" name="ip">
-            <t-input :style="{ width: '480px' }" v-model="formData.ip" ></t-input>
+          <t-form-item :label="$t('page.ipblock.label_entry_type')" name="ip_type">
+            <t-radio-group v-model="formData.ip_type">
+              <t-radio-button value="ip">{{ $t('page.ipblock.entry_type_ip') }}</t-radio-button>
+              <t-radio-button value="group">{{ $t('page.ipblock.entry_type_group') }}</t-radio-button>
+            </t-radio-group>
+          </t-form-item>
+          <t-form-item v-if="formData.ip_type !== 'group'" :label="$t('page.ipblock.label_ip')" name="ip">
+            <t-input :style="{ width: '480px' }" v-model="formData.ip"
+              :placeholder="$t('page.ipblock.ip_placeholder')"></t-input>
+            <div class="form-tips">{{ $t('page.ipblock.ip_pattern_tips') }}</div>
+          </t-form-item>
+          <t-form-item v-else :label="$t('page.ipblock.label_group')" name="group_code">
+            <t-select v-model="formData.group_code" clearable filterable :style="{ width: '480px' }">
+              <t-option v-for="g in group_options" :key="g.group_code" :value="g.group_code"
+                :label="g.group_name + ' (' + g.item_count + ')'"></t-option>
+            </t-select>
+            <a class="t-button-link" style="margin-left:8px" @click="$router.push({ name: 'WafIpGroup' })">
+              {{ $t('page.ipblock.goto_group_manage') }}
+            </a>
+          </t-form-item>
+          <t-form-item name="target_layer">
+            <template #label>
+              <span>{{ $t('page.ipblock.label_target_layer') }}</span>
+              <t-tooltip :content="$t('page.ipblock.target_layer_tips')" placement="top" :overlay-style="{ width: '300px' }" show-arrow>
+                <t-icon name="help-circle" style="margin-left:4px;cursor:pointer" />
+              </t-tooltip>
+            </template>
+            <t-select v-model="formData.target_layer" :style="{ width: '480px' }">
+              <t-option value="waf" :label="$t('page.ipblock.target_layer_waf')" />
+              <t-option value="system" :label="$t('page.ipblock.target_layer_system')" :disabled="systemLayerDisabled" />
+              <t-option value="both" :label="$t('page.ipblock.target_layer_both')" :disabled="systemLayerDisabled" />
+            </t-select>
+            <div v-if="systemLayerDisabled" class="form-tips">{{ $t('page.ipblock.system_layer_unsupported') }}</div>
+            <div v-if="recommendReason" style="margin-top:4px;font-size:12px;color:var(--td-text-color-secondary)">{{ recommendReason }}</div>
           </t-form-item>
           <t-form-item :label="$t('common.remarks')" name="remarks">
             <t-textarea :style="{ width: '480px' }" v-model="formData.remarks"  name="remarks">
@@ -95,7 +142,7 @@
 
     <t-dialog :header=" $t('common.edit')" :visible.sync="editFormVisible" :width="680" :footer="false">
       <div slot="body">
-        <t-form :data="formEditData" ref="form" :rules="rules" @submit="onSubmitEdit" :labelWidth="100">
+        <t-form :data="formEditData" ref="form" :rules="editRules" @submit="onSubmitEdit" :labelWidth="100">
           <t-form-item :label="$t('page.ipblock.label_website')" name="host_code">
             <t-select v-model="formEditData.host_code" clearable filterable :style="{ width: '480px' }">
               <t-option v-for="(item, index) in host_dic" :value="index" :label="item"
@@ -104,9 +151,23 @@
               </t-option>
             </t-select>
           </t-form-item>
-         <t-form-item :label="$t('page.ipblock.label_ip')" name="ip">
-           <t-input :style="{ width: '480px' }" v-model="formEditData.ip" ></t-input>
-         </t-form-item>
+          <t-form-item :label="$t('page.ipblock.label_entry_type')" name="ip_type">
+            <t-radio-group v-model="formEditData.ip_type">
+              <t-radio-button value="ip">{{ $t('page.ipblock.entry_type_ip') }}</t-radio-button>
+              <t-radio-button value="group">{{ $t('page.ipblock.entry_type_group') }}</t-radio-button>
+            </t-radio-group>
+          </t-form-item>
+          <t-form-item v-if="formEditData.ip_type !== 'group'" :label="$t('page.ipblock.label_ip')" name="ip">
+            <t-input :style="{ width: '480px' }" v-model="formEditData.ip"
+              :placeholder="$t('page.ipblock.ip_placeholder')"></t-input>
+            <div class="form-tips">{{ $t('page.ipblock.ip_pattern_tips') }}</div>
+          </t-form-item>
+          <t-form-item v-else :label="$t('page.ipblock.label_group')" name="group_code">
+            <t-select v-model="formEditData.group_code" clearable filterable :style="{ width: '480px' }">
+              <t-option v-for="g in group_options" :key="g.group_code" :value="g.group_code"
+                :label="g.group_name + ' (' + g.item_count + ')'"></t-option>
+            </t-select>
+          </t-form-item>
           <t-form-item :label="$t('common.remarks')" name="remarks">
             <t-textarea :style="{ width: '480px' }" v-model="formEditData.remarks"  name="remarks">
             </t-textarea>
@@ -148,6 +209,7 @@
     SearchIcon
   } from 'tdesign-icons-vue';
   import Trend from '@/components/trend/index.vue';
+  import ThreatSubSourcePanel from '@/pages/waf/threatip/components/ThreatSubSourcePanel.vue';
   import {
     prefix
   } from '@/config/global';
@@ -155,7 +217,7 @@
     allhost
   } from '@/apis/host';
   import {
-    wafIPBlockListApi,wafIPBlockDelApi,wafIPBlockEditApi,wafIPBlockAddApi,wafIPBlockDetailApi,wafIPBlockBatchDelApi,wafIPBlockDelAllApi
+    wafIPBlockListApi,wafIPBlockDelApi,wafIPBlockEditApi,wafIPBlockAddApi,wafIPBlockDetailApi,wafIPBlockBatchDelApi,wafIPBlockDelAllApi,wafIPBlockRecommendLayerApi
   } from '@/apis/ipblock';
   import {
     export_api
@@ -169,19 +231,28 @@
     CONTRACT_PAYMENT_TYPES
   } from '@/constants';
 
+  import {
+    wafIPGroupOptionsApi
+  } from '@/apis/ipgroup';
+
   const INITIAL_DATA = {
     host_code: '',
     ip: '',
     remarks: '',
+    target_layer: 'waf',
+    ip_type: 'ip',
+    group_code: '',
   };
   export default Vue.extend({
     name: 'ListBase',
     components: {
       SearchIcon,
       Trend,
+      ThreatSubSourcePanel,
     },
     data() {
       return {
+        activeSourceTab: 'manual',
         addFormVisible: false,
         editFormVisible: false,
         confirmVisible: false,
@@ -193,6 +264,8 @@
         formEditData: {
           ...INITIAL_DATA
         },
+        // 新增与编辑各用一份校验规则：两个弹窗共用同一份时，
+        // 依赖 ip_type 的条件校验会读到另一个弹窗的表单值而误判
         rules: {
           host_code: [{
             required: true,
@@ -200,11 +273,35 @@
             type: 'error'
           }],
           ip: [{
-            required: true,
+            validator: (val) => this.formData.ip_type === 'group' || !!val,
             message: this.$t('common.placeholder')+this.$t('page.ipblock.label_ip'),
             type: 'error'
           }],
+          group_code: [{
+            validator: (val) => this.formData.ip_type !== 'group' || !!val,
+            message: this.$t('common.placeholder')+this.$t('page.ipblock.label_group'),
+            type: 'error'
+          }],
         },
+        editRules: {
+          host_code: [{
+            required: true,
+            message: this.$t('common.placeholder')+this.$t('page.ipblock.label_website'),
+            type: 'error'
+          }],
+          ip: [{
+            validator: (val) => this.formEditData.ip_type === 'group' || !!val,
+            message: this.$t('common.placeholder')+this.$t('page.ipblock.label_ip'),
+            type: 'error'
+          }],
+          group_code: [{
+            validator: (val) => this.formEditData.ip_type !== 'group' || !!val,
+            message: this.$t('common.placeholder')+this.$t('page.ipblock.label_group'),
+            type: 'error'
+          }],
+        },
+        //IP组下拉选项
+        group_options: [],
         textareaValue: '',
         prefix,
         dataLoading: false,
@@ -220,6 +317,11 @@
             width: 250,
             ellipsis: true,
             colKey: 'host_code',
+          },
+          {
+            title: this.$t('page.ipblock.col_entry_type'),
+            width: 110,
+            colKey: 'ip_type',
           },
           {
             title: this.$t('page.ipblock.label_ip'),
@@ -266,7 +368,9 @@
         deleteIdx: -1,
         guardStatusIdx :-1,
         //主机字典
-        host_dic:{}
+        host_dic:{},
+        //推荐封禁层级的理由文案
+        recommendReason: ''
       };
     },
     computed: {
@@ -282,14 +386,52 @@
       offsetTop() {
         return this.$store.state.setting.isUseTabsRouter ? 48 : 0;
       },
+      // 系统防火墙(iptables/netsh)只认单IP与CIDR，通配符/区间/IP组都表达不了。
+      // 这里只是前端体验层的拦截，后端 api/waf_ip_entry_validate.go 还会再挡一次。
+      systemLayerDisabled() {
+        if (this.formData.ip_type === 'group') {
+          return true;
+        }
+        return /[*\-]/.test(this.formData.ip || '');
+      },
+    },
+    watch: {
+      // 切到不支持系统层的写法时，把已选的层级拉回 WAF 应用层，避免提交时才报错
+      systemLayerDisabled(disabled) {
+        if (disabled && this.formData.target_layer !== 'waf') {
+          this.formData.target_layer = 'waf';
+        }
+      },
     },
     mounted() {
       this.loadHostList().then(() => {
         this.getList("");
       });
+      this.loadGroupOptions();
     },
 
     methods: {
+      loadGroupOptions() {
+        let that = this
+        wafIPGroupOptionsApi()
+          .then((res) => {
+            if (res.code === 0) {
+              that.group_options = res.data ?? [];
+            }
+          })
+          .catch((e: Error) => { console.log(e); });
+      },
+      // 列表里组引用行显示「组名(条目数)」；组已被删时退回显示短码
+      groupLabel(groupCode) {
+        const g = (this.group_options || []).find((x) => x.group_code === groupCode);
+        return g ? `${g.group_name} (${g.item_count})` : groupCode;
+      },
+      onSourceTabChange(val) {
+        // 切到"订阅来源"Tab 时刷新汇总
+        if (val === 'sub' && this.$refs.subPanel) {
+          (this.$refs.subPanel as any).refresh();
+        }
+      },
       loadHostList() {
         return new Promise((resolve, reject) => {
           allhost()
@@ -369,11 +511,22 @@
       },
       handleAddipblock() {
         this.addFormVisible = true
-        this.formData = {
-          host_code: '',
-          ip: '',
-          remarks: '',
-        };
+        this.recommendReason = ''
+        this.formData = {...INITIAL_DATA};
+        this.loadGroupOptions();
+      },
+      // 站点变化时按后端智能推荐预选封禁层级
+      onHostChange(hostCode) {
+        let that = this
+        if (!hostCode) { that.recommendReason = ''; return }
+        wafIPBlockRecommendLayerApi({ host_code: hostCode })
+          .then((res) => {
+            if (res.code === 0 && res.data) {
+              that.formData.target_layer = res.data.layer || 'waf'
+              that.recommendReason = res.data.reason || ''
+            }
+          })
+          .catch((e: Error) => { console.log(e) })
       },
       onSubmit({
         result,
@@ -500,7 +653,10 @@
             if (resdata.code === 0) {
               that.detail_data = resdata.data;
               that.formEditData = {
-                ...that.detail_data
+                ...that.detail_data,
+                //存量记录的 ip_type 是空串，等价于「单条IP」
+                ip_type: that.detail_data.ip_type || 'ip',
+                group_code: that.detail_data.group_code || '',
               }
             }
           })
@@ -508,9 +664,6 @@
             console.log(e);
           })
           .finally(() => {});
-      },
-      handleJumpOnlineUrl(){
-        window.open(this.samwafglobalconfig.getOnlineUrl()+"/guide/IPBlack.html");
       },
       // 批量删除处理
       handleBatchDelete() {
@@ -625,6 +778,12 @@
 
   .search-input {
     width: 360px;
+  }
+
+  .form-tips {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--td-text-color-secondary);
   }
 
   .t-button+.t-button {

@@ -14,12 +14,17 @@
                 <t-option value="ssl_expire" :label="$t('page.notify_log.message_type_ssl_expire')"></t-option>
                 <t-option value="system_error" :label="$t('page.notify_log.message_type_system_error')"></t-option>
                 <t-option value="ip_ban" :label="$t('page.notify_log.message_type_ip_ban')"></t-option>
+                <t-option value="access_login" :label="$t('page.notify_log.message_type_access_login')"></t-option>
+                <t-option value="access_abnormal" :label="$t('page.notify_log.message_type_access_abnormal')"></t-option>
+                <t-option value="manage_login_abnormal" :label="$t('page.notify_log.message_type_manage_login_abnormal')"></t-option>
               </t-select>
             </t-form-item>
             <t-form-item :label="$t('page.notify_log.label_send_status')" name="status">
               <t-select v-model="searchformData.status" clearable :style="{ width: '120px' }">
                 <t-option :value="1" :label="$t('page.notify_log.status_success')"></t-option>
                 <t-option :value="0" :label="$t('page.notify_log.status_failed')"></t-option>
+                <!-- 被抑制的通知也留痕，这样"为什么没收到"能直接在这里查到 -->
+                <t-option :value="2" :label="$t('page.notify_log.status_suppressed')"></t-option>
               </t-select>
             </t-form-item>
             <t-form-item :label="$t('page.notify_log.label_start_time')" name="start_time">
@@ -35,7 +40,7 @@
           </t-form>
         </div>
       </t-row>
-      <t-alert theme="info" :message="$t('page.notify_log.alert_message')" close></t-alert>
+      <help-block :summary="$t('page.notify_log.alert_message')" doc="guide/NotifyLog" />
       <div class="table-container">
         <t-table :columns="columns" :data="data" :rowKey="rowKey" :verticalAlign="verticalAlign" :hover="hover"
           :pagination="pagination" :loading="dataLoading" @page-change="rehandlePageChange" @change="rehandleChange"
@@ -50,7 +55,15 @@
           </template>
           <template #status="{ row }">
             <t-tag v-if="row.status === 1" theme="success">{{ $t('page.notify_log.status_success') }}</t-tag>
+            <t-tag v-else-if="row.status === 2" theme="warning">{{ $t('page.notify_log.status_suppressed') }}</t-tag>
             <t-tag v-else theme="danger">{{ $t('page.notify_log.status_failed') }}</t-tag>
+          </template>
+          <template #suppress_reason="{ row }">
+            <span v-if="row.status !== 2">-</span>
+            <span v-else>
+              {{ getSuppressReasonName(row.suppress_reason) }}
+              <t-tag v-if="row.suppress_count > 1" theme="warning" variant="light" size="small">×{{ row.suppress_count }}</t-tag>
+            </span>
           </template>
           <template #op="slotProps">
             <a class="t-button-link" @click="handleViewDetail(slotProps)">{{ $t('page.notify_log.view_detail') }}</a>
@@ -86,7 +99,19 @@
           </t-form-item>
           <t-form-item :label="$t('page.notify_log.label_send_status')">
             <t-tag v-if="detailData.status === 1" theme="success">{{ $t('page.notify_log.status_success') }}</t-tag>
+            <t-tag v-else-if="detailData.status === 2" theme="warning">{{ $t('page.notify_log.status_suppressed') }}</t-tag>
             <t-tag v-else theme="danger">{{ $t('page.notify_log.status_failed') }}</t-tag>
+          </t-form-item>
+          <t-form-item v-if="detailData.status === 2" :label="$t('page.notify_log.label_suppress_reason')">
+            <span>{{ getSuppressReasonName(detailData.suppress_reason) }}</span>
+            <div style="font-size: 12px; color: #666; margin-top: 4px;">
+              {{ $t('page.notify_log.label_suppress_count') }}: {{ detailData.suppress_count || 1 }} —— {{ $t('page.notify_log.suppress_tips') }}
+            </div>
+          </t-form-item>
+          <t-form-item v-if="detailData.template_used" :label="$t('page.notify_log.label_template_used')">
+            <t-tag :theme="detailData.template_used === 'custom_fallback' ? 'danger' : 'default'">
+              {{ getTemplateUsedName(detailData.template_used) }}
+            </t-tag>
           </t-form-item>
           <t-form-item :label="$t('page.notify_log.label_error_msg')" v-if="detailData.status === 0 && detailData.error_msg">
             <t-textarea :value="detailData.error_msg" :autosize="{ minRows: 2, maxRows: 5 }" readonly></t-textarea>
@@ -125,6 +150,7 @@ export default Vue.extend({
         { title: this.$t('page.notify_log.label_message_type'), colKey: 'message_type', width: 150 },
         { title: this.$t('page.notify_log.label_message_title'), colKey: 'message_title', ellipsis: true, width: 200 },
         { title: this.$t('page.notify_log.label_send_status'), colKey: 'status', width: 100 },
+        { title: this.$t('page.notify_log.label_suppress_reason'), colKey: 'suppress_reason', width: 160 },
         { title: this.$t('page.notify_log.label_send_time'), colKey: 'send_time', width: 180 },
         {
           align: 'left',
@@ -202,8 +228,29 @@ export default Vue.extend({
         ssl_expire: this.$t('page.notify_log.message_type_ssl_expire'),
         system_error: this.$t('page.notify_log.message_type_system_error'),
         ip_ban: this.$t('page.notify_log.message_type_ip_ban'),
+        access_login: this.$t('page.notify_log.message_type_access_login'),
+        access_abnormal: this.$t('page.notify_log.message_type_access_abnormal'),
+        manage_login_abnormal: this.$t('page.notify_log.message_type_manage_login_abnormal'),
       };
       return typeMap[type] || type;
+    },
+    // 抑制原因中文化：直接回答"为什么这条没发出去"
+    getSuppressReasonName(reason: string) {
+      const reasonMap: any = {
+        cooldown: this.$t('page.notify_log.suppress_reason_cooldown'),
+        rate_limit: this.$t('page.notify_log.suppress_reason_rate_limit'),
+        quiet_hours: this.$t('page.notify_log.suppress_reason_quiet_hours'),
+        filter_miss: this.$t('page.notify_log.suppress_reason_filter_miss'),
+      };
+      return reasonMap[reason] || reason || '-';
+    },
+    getTemplateUsedName(used: string) {
+      const usedMap: any = {
+        default: this.$t('page.notify_log.template_used_default'),
+        custom: this.$t('page.notify_log.template_used_custom'),
+        custom_fallback: this.$t('page.notify_log.template_used_fallback'),
+      };
+      return usedMap[used] || used;
     },
     rehandlePageChange(pageInfo: any) {
       this.searchformData.pageIndex = pageInfo.current;

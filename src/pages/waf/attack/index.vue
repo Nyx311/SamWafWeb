@@ -1,10 +1,8 @@
 <template>
   <div>
-    <t-alert theme="info" :message="$t('page.visit_log.visit_log')" :close="true">
-      <template #operation>
-        <span @click="handleJumpOnlineUrl">{{ $t('common.online_document') }}</span>
-      </template>
-    </t-alert>
+    <help-block :summary="$t('page.visit_log.visit_log')" doc="guide/VisitLog">
+      <template #actions><ip-lookup ref="ipLookup" /></template>
+    </help-block>
 
     <!-- 日志配置区域 -->
     <t-card class="log-config-card" style="margin-bottom: 16px;">
@@ -232,10 +230,9 @@
             <span>{{ host_nickname_dic[row.host_code] || '-' }}</span>
           </template>
           <template #src_ip="{ row }">
-            <span>{{ row.src_ip }}</span>
-            <t-button theme="primary" shape="round" size="small" style="margin-left: 8px;" @click="handleAddipblock(row)">
-              {{ $t('page.visit_log.detail.add_to_deny_list') }}
-            </t-button>
+            <t-tooltip :content="$t('common.ip_lookup.click_tip')">
+              <a class="ipl-link" @click="openIpLookup(row.src_ip)">{{ row.src_ip }}</a>
+            </t-tooltip>
           </template>
           <template #op="slotProps">
             <a class="t-button-link" @click="handleClickIPDetail(slotProps)" v-if="attack_ip == ''">{{
@@ -303,6 +300,25 @@
     <!-- IP提取问题对话框 -->
     <t-dialog :header="$t('page.visit_log.detail.ip_extract_issue')" :visible.sync="ipExtractDialogVisible" :width="800" :footer="false">
       <div slot="body">
+        <!-- 这里改的是全局配置，站点里的「真实IP来源」会覆盖它；不写清楚用户会以为改了全局所有站点都变 -->
+        <t-alert theme="warning" style="margin-bottom: 16px;">
+          <div>
+            <b>{{ $t('page.visit_log.detail.ip_extract_scope_title') }}</b>
+            <div style="margin-top: 4px;">{{ $t('page.visit_log.detail.ip_extract_scope_desc') }}</div>
+            <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <t-select v-model="ipExtractHostCode" clearable filterable :style="{ width: '220px' }"
+                        :placeholder="$t('page.visit_log.detail.ip_extract_select_host')">
+                <t-option v-for="item in realHostOptions" :value="item.value" :label="item.label" :key="item.value">{{ item.label }}</t-option>
+              </t-select>
+              <t-button size="small" :disabled="!ipExtractHostCode" @click="gotoHostIpSource">
+                {{ $t('page.visit_log.detail.ip_extract_goto_host') }}
+              </t-button>
+              <t-button size="small" variant="outline" :disabled="!ipExtractHostCode" @click="openHostProbe">
+                {{ $t('page.visit_log.detail.ip_extract_view_headers') }}
+              </t-button>
+            </div>
+          </div>
+        </t-alert>
         <p>{{ $t('page.visit_log.detail.ip_extract_issue_desc') }}</p>
         
         <!-- 视频教程链接 -->
@@ -368,6 +384,9 @@
         </t-form>
       </div>
     </t-dialog>
+    <!-- 某个站点单独看真实到达的请求头(与站点编辑页共用同一组件) -->
+    <ip-source-probe-dialog :visible.sync="hostProbeVisible" :host-code="ipExtractHostCode"
+                            :host-name="host_dic[ipExtractHostCode] || ''" />
   </div>
 </template>
 <script lang="ts">
@@ -375,6 +394,7 @@ import Vue from 'vue';
 import { SearchIcon } from 'tdesign-icons-vue';
 import Trend from '@/components/trend/index.vue';
 import { prefix } from '@/config/global';
+import IpSourceProbeDialog from '@/pages/waf/host/components/IpSourceProbeDialog.vue';
 import { allsharedblist, exportlog } from '@/apis/waflog/attacklog';
 import { aiMarkLabelApi, aiUnmarkLabelApi, aiLabelByUuidsApi } from '@/apis/ai';
 import VisitDetailPage from './detail/index.vue'
@@ -383,9 +403,6 @@ import { NowDate, ConvertStringToUnix, ConvertDateToString, ConvertUnixToDate } 
 import {
   allhost
 } from '@/apis/host';
-import {
-  wafIPBlockAddApi
-} from '@/apis/ipblock';
 import {
   get_detail_by_item_api,
   edit_system_config_api
@@ -437,6 +454,7 @@ const GROUP_COLUMNS = [
 export default Vue.extend({
   name: 'WebLogList',
   components: {
+    IpSourceProbeDialog,
     SearchIcon,
     Trend,
     VisitDetailPage
@@ -734,6 +752,11 @@ export default Vue.extend({
       },
       //主机字典
       host_dic: {},
+      ipExtractHostCode: "", //IP提取弹窗里选中的站点(用于直达站点配置/查看该站点真实请求头)
+      hostProbeVisible: false,
+      //「IP提取有问题?」里选站点用的列表：只含真实站点("全局网站"不是站点，没有自己的真实IP来源配置)。
+      //必须整体赋值成数组，不能在模板里现算 host_dic —— Vue2 对新增 key 不响应，会渲染成空
+      realHostOptions: [],
       //主机昵称字典 host_code -> 纯昵称
       host_nickname_dic: {},
       //日志存档字典
@@ -926,6 +949,11 @@ export default Vue.extend({
     next(); // 继续后续的导航解析过程
   },
   methods: {
+    // 点日志里的 IP 直接开归属查询弹窗，省得用户复制粘贴
+    openIpLookup(ip) {
+      if (!ip) return;
+      this.$refs.ipLookup && this.$refs.ipLookup.open(ip);
+    },
     // 收集路由 query 中的显式筛选意图。
     // 用 hasOwnProperty 判定"存在"：?action= 得到 ''、?action 得到 null，
     // 这两种都属于"调用方明确要求把该字段设成空"，用 != null 判定会漏掉后者
@@ -1220,11 +1248,16 @@ export default Vue.extend({
               let host_options = resdata.data;
               //昵称字典整体替换赋值，保证表格列能重新渲染(Vue2 对新增 key 不响应)
               const nicknameDic = {};
+              const realHosts = [];
               for (let i = 0; i < host_options.length; i++) {
                 this.host_dic[host_options[i].value] = host_options[i].label;
                 nicknameDic[host_options[i].value] = host_options[i].nickname || '';
+                if (host_options[i].global_host !== 1) {
+                  realHosts.push({ value: host_options[i].value, label: host_options[i].label });
+                }
               }
               this.host_nickname_dic = nicknameDic;
+              this.realHostOptions = realHosts;
             }
             resolve(); // 调用 resolve 表示加载完成
           })
@@ -1471,9 +1504,6 @@ export default Vue.extend({
       this.deleteIdx = -1;
     },
     //Jump Url
-    handleJumpOnlineUrl() {
-      window.open(this.samwafglobalconfig.getOnlineUrl()+"/guide/AttackLog.html");
-    },
     /**
      * table 排序
      */
@@ -1536,54 +1566,6 @@ export default Vue.extend({
       this.dateControl.range1[1] = NowDate + " 23:59:59"
       this.searchformData.unix_add_time_begin = ConvertStringToUnix(this.dateControl.range1[0]).toString()
       this.searchformData.unix_add_time_end = ConvertStringToUnix(this.dateControl.range1[1]).toString()
-    },
-    handleAddipblock(row) {
-      const ip = row.src_ip;
-      const host_code = row.host_code;
-
-      if (!host_code) {
-        this.$message.warning("当前网站不存在");
-        return
-      }
-
-      let that = this
-
-      const confirmDia = this.$dialog.confirm({
-        header: this.$t('page.visit_log.detail.add_to_deny_list_confirm_header'),
-        body: this.$t('page.visit_log.detail.add_to_deny_list_confirm_body'),
-        confirmBtn: this.$t('common.confirm'),
-        cancelBtn: this.$t('common.cancel'),
-        onConfirm: ({ e }) => {
-          //add deny IP
-          let formData = {
-            host_code: host_code,
-            ip: ip,
-            remarks: '手工增加',
-          };
-          wafIPBlockAddApi({
-            ...formData
-          })
-            .then((res) => {
-              let resdata = res
-              console.log(resdata)
-              if (resdata.code === 0) {
-                that.$message.success(resdata.msg);
-              } else {
-                that.$message.warning(resdata.msg);
-              }
-            })
-            .catch((e: Error) => {
-              console.log(e);
-            })
-            .finally(() => { });
-
-          confirmDia.destroy();
-        },
-        onClose: ({ e, trigger }) => {
-          console.log('关闭弹窗');
-          confirmDia.hide();
-        },
-      });
     },
 
     // 获取过滤后的搜索数据
@@ -1713,6 +1695,17 @@ export default Vue.extend({
       });
     },
 
+    // 跳到该站点的「真实IP来源」配置(网站防护列表页会自动打开编辑弹窗的"其他配置")
+    gotoHostIpSource() {
+      if (!this.ipExtractHostCode) return;
+      this.ipExtractDialogVisible = false;
+      this.$router.push({ name: 'WafHost', query: { editcode: this.ipExtractHostCode, tab: 'ipsource' } });
+    },
+    // 就地查看该站点最近真实到达的请求头
+    openHostProbe() {
+      if (!this.ipExtractHostCode) return;
+      this.hostProbeVisible = true;
+    },
     // 快捷选择IP头信息
     selectIPHeader(headerValue) {
       this.ipExtractFormData.value = headerValue;
@@ -1749,5 +1742,15 @@ export default Vue.extend({
 
 .t-button+.t-button {
   margin-left: @spacer;
+}
+
+.ipl-link {
+  color: var(--td-brand-color);
+  cursor: pointer;
+}
+
+.ipl-link:hover {
+  color: var(--td-brand-color-hover);
+  text-decoration: underline;
 }
 </style>

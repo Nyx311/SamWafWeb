@@ -45,7 +45,8 @@
         </t-input>
       </t-form-item>
       <t-form-item name="secretCode" v-if="showSecretCode">
-        <t-input v-model="formData.secret_code" size="large" :type="'password'"  clearable  :placeholder="$t('login.input_secret_code_placeholder')" >
+        <!-- 安全码是 2FA，不能被浏览器塞进登录口令；账号/密码框的自动填充保持不动 -->
+        <t-input v-model="formData.secret_code" size="large" :type="'password'"  clearable  autocomplete="one-time-code" :placeholder="$t('login.input_secret_code_placeholder')" >
           <template #prefix-icon>
             <lock-on-icon />
           </template>
@@ -176,6 +177,13 @@ export default Vue.extend({
           if (res.code == 0) {
             localStorage.setItem("access_token", res.data.access_token);
             localStorage.setItem("current_account", this.formData.account);
+
+            // 登录来源提醒：进入布局后由 layouts/index.vue 在右下角弹出。
+            // 这里就存下来（而不是等进系统再查接口），是因为「上次登录」在本次登录写库后就被覆盖了，
+            // 只有登录响应这一刻拿得到。放 sessionStorage：关掉标签页就没了，不会下次打开还弹旧的。
+            if (res.data.login_notice) {
+              sessionStorage.setItem("login_notice", JSON.stringify(res.data.login_notice));
+            }
 
             // 首次登录/口令到期：强制改密，改密成功后再进入系统
             // 注意：改密前不要触发受服务端"强制改密门"拦截的接口(如 fetchParams)，否则会拿到 -4

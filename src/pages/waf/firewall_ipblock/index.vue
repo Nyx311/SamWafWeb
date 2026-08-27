@@ -1,5 +1,7 @@
 <template>
   <div>
+    <t-tabs v-model="activeSourceTab" @change="onSourceTabChange">
+    <t-tab-panel value="manual" :label="$t('page.firewall_ipblock.tab_manual')">
     <t-card class="list-card-container">
       <t-row justify="space-between">
         <div class="left-operation-container">
@@ -96,6 +98,18 @@
             </div>
           </t-card>
         </t-col>
+        <t-col :span="3">
+          <t-card size="small" class="stat-card-clickable" @click.native="goSubSourceTab">
+            <div class="stat-card">
+              <div class="stat-label">
+                {{ $t('page.firewall_ipblock.stat_sub_landed') }}
+                <t-icon name="chevron-right" />
+              </div>
+              <div class="stat-value stat-sub">{{ subLandedTotal }}</div>
+              <div class="stat-sub-hint">{{ $t('page.firewall_ipblock.stat_sub_landed_hint') }}</div>
+            </div>
+          </t-card>
+        </t-col>
       </t-row>
 
       <t-alert
@@ -106,11 +120,7 @@
           <span @click="handleJumpOnlineUrl">{{ $t('common.online_document') }}</span>
         </template>
       </t-alert>
-      <t-alert theme="info" :message="$t('page.firewall_ipblock.alert_message')" close>
-        <template #operation>
-          <span @click="handleJumpOnlineUrl">{{ $t('common.online_document') }}</span>
-        </template>
-      </t-alert>
+      <help-block :summary="$t('page.firewall_ipblock.alert_message')" doc="guide/FirewallIPBlock" />
       <div class="table-container">
         <t-table :columns="columns" :data="data" :rowKey="rowKey" :verticalAlign="verticalAlign" :hover="hover"
           :pagination="pagination" :selected-row-keys="selectedRowKeys" :loading="dataLoading"
@@ -164,6 +174,13 @@
         </t-table>
       </div>
     </t-card>
+    </t-tab-panel>
+    <t-tab-panel value="sub" :label="$t('page.firewall_ipblock.tab_sub_source')">
+      <t-card class="list-card-container">
+        <threat-sub-source-panel ref="subPanel" land="system" />
+      </t-card>
+    </t-tab-panel>
+    </t-tabs>
 
     <!-- 添加对话框 -->
     <t-dialog :header="$t('common.new')" :visible.sync="addFormVisible" :width="680" :footer="false">
@@ -307,12 +324,21 @@
     </t-dialog>
 
     <!-- 批量删除确认对话框 -->
-    <t-dialog 
-      :header="$t('page.firewall_ipblock.confirm_batch_delete')" 
-      :body="$t('common.data_delete_warning')" 
-      :visible.sync="batchDeleteConfirmVisible" 
+    <t-dialog
+      :header="$t('page.firewall_ipblock.confirm_batch_delete')"
+      :body="$t('common.data_delete_warning')"
+      :visible.sync="batchDeleteConfirmVisible"
       @confirm="onConfirmBatchDelete"
       :onCancel="onCancelBatchDelete">
+    </t-dialog>
+
+    <!-- 清理过期确认对话框（会删除已过期记录，不可恢复） -->
+    <t-dialog
+      :header="$t('page.firewall_ipblock.confirm_clear_expired')"
+      :body="$t('page.firewall_ipblock.confirm_clear_expired_body')"
+      :visible.sync="clearExpiredConfirmVisible"
+      @confirm="onConfirmClearExpired"
+      :onCancel="onCancelClearExpired">
     </t-dialog>
   </div>
 </template>
@@ -322,6 +348,8 @@ import Vue from 'vue';
 import { SearchIcon } from 'tdesign-icons-vue';
 import { prefix } from '@/config/global';
 import { allhost } from '@/apis/host';
+import ThreatSubSourcePanel from '@/pages/waf/threatip/components/ThreatSubSourcePanel.vue';
+import { wafThreatIPLandedSummaryApi } from '@/apis/threatip';
 import {
   wafFirewallIPBlockListApi,
   wafFirewallIPBlockAddApi,
@@ -360,14 +388,17 @@ export default Vue.extend({
   name: 'FirewallIPBlockList',
   components: {
     SearchIcon,
+    ThreatSubSourcePanel,
   },
   data() {
     return {
+      activeSourceTab: 'manual',
       addFormVisible: false,
       batchAddFormVisible: false,
       editFormVisible: false,
       confirmVisible: false,
       batchDeleteConfirmVisible: false,
+      clearExpiredConfirmVisible: false,
       formData: { ...INITIAL_DATA },
       batchAddFormData: { ...BATCH_ADD_INITIAL_DATA },
       formEditData: { ...INITIAL_DATA },
@@ -411,6 +442,8 @@ export default Vue.extend({
         inactive: 0,
         expired: 0
       },
+      // 订阅落地到系统防火墙(ipset)的总条数(各系统层渠道快照条数之和)
+      subLandedTotal: 0,
       // 当前环境是否具备系统防火墙封禁能力（容器内未装 iptables / 缺少权限时为 false）
       fwCapability: {
         available: true,
@@ -511,8 +544,35 @@ export default Vue.extend({
       this.getList("");
       this.getStatistics();
     });
+    this.loadSubLandedTotal();
   },
   methods: {
+    onSourceTabChange(val) {
+      // 切到"订阅来源"Tab 时刷新汇总
+      if (val === 'sub' && this.$refs.subPanel) {
+        (this.$refs.subPanel as any).refresh();
+      }
+    },
+    // 点击"订阅落地(系统层)"统计卡 → 切到"订阅来源"Tab 看逐渠道详情
+    goSubSourceTab() {
+      this.activeSourceTab = 'sub';
+      this.$nextTick(() => {
+        if (this.$refs.subPanel) {
+          (this.$refs.subPanel as any).refresh();
+        }
+      });
+    },
+    // 汇总订阅落地到系统防火墙的总条数(供统计卡片对照展示)
+    loadSubLandedTotal() {
+      wafThreatIPLandedSummaryApi({ land: 'system' })
+        .then((res) => {
+          if (res.code === 0) {
+            const list = res.data ?? [];
+            this.subLandedTotal = list.reduce((sum, it) => sum + (it.count || 0), 0);
+          }
+        })
+        .catch((e: Error) => { console.log(e); });
+    },
     getCapability() {
       wafFirewallIPBlockCapabilityApi({})
         .then((res) => {
@@ -833,6 +893,14 @@ export default Vue.extend({
         });
     },
     handleClearExpired() {
+      // 清理过期会【删除】已过期记录(不可恢复)，先二次确认
+      this.clearExpiredConfirmVisible = true;
+    },
+    onCancelClearExpired() {
+      this.clearExpiredConfirmVisible = false;
+    },
+    onConfirmClearExpired() {
+      this.clearExpiredConfirmVisible = false;
       let that = this;
       wafFirewallIPBlockClearExpiredApi({})
         .then((res) => {
@@ -945,6 +1013,26 @@ export default Vue.extend({
     &.stat-expired {
       color: #faad14;
     }
+
+    &.stat-sub {
+      color: #1677ff;
+    }
+  }
+
+  .stat-sub-hint {
+    font-size: 12px;
+    color: #1677ff;
+    margin-top: 4px;
+  }
+}
+
+.stat-card-clickable {
+  cursor: pointer;
+  transition: box-shadow 0.2s, border-color 0.2s;
+
+  &:hover {
+    border-color: #1677ff;
+    box-shadow: 0 2px 8px rgba(22, 119, 255, 0.2);
   }
 }
 </style>
