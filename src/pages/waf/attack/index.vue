@@ -1218,7 +1218,14 @@ export default Vue.extend({
         console.log("loadShareDbList", resdata)
         if (resdata.code === 0) {
           let share_options = resdata.data;
+          share_options.sort((a, b) => {
+            if (a.is_current !== b.is_current) {
+              return a.is_current ? -1 : 1;
+            }
+            return b.end_time.localeCompare(a.end_time);
+          });
           let currentName = "";
+          that.share_db_dic = {};
           for (let i = 0; i < share_options.length; i++) {
             that.share_db_dic[share_options[i].file_name] = share_options[i].file_name + "(" + share_options[i].cnt + ")"
             // 后端按驱动标记当前(实时)分片：SQLite=local_log.db，MySQL=web_logs
