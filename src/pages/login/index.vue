@@ -5,7 +5,7 @@
     <div class="login-container">
       <div class="title-container">
         <h1 class="title margin-no">{{$t('login.login_title')}}</h1>
-        <h1 class="title">{{$t('login.login_sub_title')}}</h1>
+        <h1 class="title admin-login-title">{{loginTitle}}</h1>
         <div class="sub-title">
         </div>
       </div>
@@ -15,7 +15,7 @@
       <tdesign-setting />
     </div>
 
-    <footer class="copyright">Copyright @ 2022-{{ new Date().getFullYear() }} SamWaf. All Rights Reserved  <t-link theme="primary" @click="handleJumpOnlineUrl"> {{$t('login.login_has_question')}} </t-link>  <a href="https://doc.samwaf.com">{{$t('login.login_online_document')}} </a></footer>
+    <footer class="copyright">Copyright @ 2022-{{ new Date().getFullYear() }} SamWaf. All Rights Reserved  <t-link theme="primary" @click="handleJumpOnlineUrl"> {{$t('login.login_has_question')}} </t-link>  <a href="https://doc.samwaf.com" target="_blank" rel="noopener noreferrer">{{$t('login.login_online_document')}} </a></footer>
   </div>
 </template>
 <script>
@@ -23,6 +23,7 @@ import Login from './components/components-login.vue';
 import Register from './components/components-register.vue';
 import LoginHeader from './components/components-header.vue';
 import TdesignSetting from '@/layouts/setting.vue';
+import { adminTitles } from '@/utils/adminTitles';
 
 export default {
   name: 'LoginIndex',
@@ -38,13 +39,18 @@ export default {
       copyright:'',
     };
   },
+  computed: {
+    loginTitle() {
+      return adminTitles.admin_title || this.$t('login.login_sub_title');
+    },
+  },
   methods: {
     switchType(val) {
       this.type = val;
     },
     //跳转界面
     handleJumpOnlineUrl(){
-      window.open(this.samwafglobalconfig.getOnlineUrl()+"");
+      window.open(this.samwafglobalconfig.getOnlineUrl()+"", '_blank', 'noopener,noreferrer');
     },
   },
 };

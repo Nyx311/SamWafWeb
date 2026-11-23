@@ -1,6 +1,7 @@
 // 主机配置初始化数据
 export const INITIAL_DATA = {
   nickname: '',
+  group_code: '',
   host: 'www.baidu.com',
   port: 80,
   remote_host: 'http://www.baidu.com',
@@ -16,6 +17,7 @@ export const INITIAL_DATA = {
   captcha_json: '{"is_enable_captcha":0,"path_prefix":"","exclude_urls":[],"expire_time":24,"engine_type":"traditional","cap_js_config":{"challengeCount":50,"challengeSize":32,"challengeDifficulty":4,"expiresMs":600000,"infoTitle":{"en":"","zh":""},"infoText":{"en":"","zh":""}}}',
   start_status: '0',
   exclude_url_log: '',
+  exclude_ip_log: '',
   is_enable_load_balance: '0',
   load_balance_stage: '1',
   unrestricted_port: '0',
@@ -107,6 +109,18 @@ export const INITIAL_CACHE = {
   max_memory_size_mb: "0"
 };
 
+// 网站密码访问的会话时效与保护范围配置初始化数据。
+// 这些默认值必须与后端 model.DecodeHttpAuthConfig 的空值兜底逐条一致：
+// 1440 分钟(24小时) + 不启用空闲超时 + 绑定登录IP + 整站保护，也就是加这套配置之前的既有行为。
+export const INITIAL_HTTP_AUTH = {
+  session_ttl: "1440",
+  idle_timeout: "0",
+  bind_ip: "1",
+  path_scope: "all",
+  paths: "",
+  bypass_ip_group: ""
+};
+
 // 静态站点安全响应头默认值（留空 header_value 则该项使用系统内置默认值）
 export const DEFAULT_STATIC_SECURITY_HEADERS = [
   { header_name: 'X-Content-Type-Options',  header_value: 'nosniff' },
@@ -190,6 +204,11 @@ export const INITIAL_ACCESS = {
   require_otp: "0",
   unauth_action: "",
   allow_ip_group_code: "",
+  // 跨源(CORS)：留空=沿用全局配置，填 "-" =本站点显式关闭跨源
+  cors_allow_origins: "",
+  cors_allow_methods: "",
+  cors_allow_headers: "",
+  cors_max_age: 0,
 };
 
 export const INITIAL_CSRF = {

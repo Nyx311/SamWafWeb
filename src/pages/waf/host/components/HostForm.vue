@@ -3,8 +3,15 @@
 
   <div class="host-form">
       <t-form :data="formData" ref="form" :rules="rules" @submit="onSubmit" :labelWidth="230">
-        <div class="host-tabs-wrapper" :class="{ 'host-tabs-wrapper--left': tabPlacement === 'left' }">
+        <div class="host-tabs-wrapper"
+             :class="{ 'host-tabs-wrapper--left': tabPlacement === 'left', 'host-tabs-wrapper--fullscreen': isFullscreen }">
           <div class="tab-placement-bar">
+            <t-tooltip :content="isFullscreen ? $t('page.host.exit_fullscreen') : $t('page.host.enter_fullscreen')"
+                       placement="top" show-arrow>
+              <t-button variant="text" shape="square" size="small" @click="toggleFullscreen">
+                <t-icon :name="isFullscreen ? 'fullscreen-exit' : 'fullscreen'"/>
+              </t-button>
+            </t-tooltip>
             <t-tooltip :content="tabPlacement === 'left' ? $t('page.host.tab_layout_horizontal') : $t('page.host.tab_layout_vertical')"
                        placement="top" show-arrow>
               <t-button variant="text" shape="square" size="small" @click="toggleTabPlacement">
@@ -19,57 +26,159 @@
               {{$t('page.host.tab_base')}}
             </template>
             
-            <t-form-item :label="$t('page.host.website')" name="host">
-              <t-tooltip class="placement top center" :content="$t('page.host.host_tips')" placement="top"
-                       :overlay-style="{ width: '200px' }" show-arrow>
-                <t-input :style="{ width: '480px' }" v-model="formData.host" :placeholder="$t('common.placeholder')" :disabled="isEdit"></t-input>
-              </t-tooltip>
-            </t-form-item> 
-            <t-form-item :label="$t('page.host.ssl')" name="ssl">
-              <t-tooltip class="placement top center" :content="$t('page.host.ssl_tips')" placement="top"
-                       :overlay-style="{ width: '200px' }" show-arrow>
-                <t-radio-group v-model="formData.ssl">
-                  <t-radio value="0">{{ $t('page.host.ssl_option_no') }}</t-radio>
-                  <t-radio value="1">{{ $t('page.host.ssl_option_yes') }}</t-radio>
-                </t-radio-group>
-              </t-tooltip>
+            <!-- 「基础内容」按主题分 6 个小节：站点 / 监听与协议 / HTTPS证书 / 回源 / 运行方式 / 备注信息。
+                 分节前这些字段是按主题交叉排列的（证书被启动状态劈成两半），端口区那句"下方的加密证书"因此对不上。 -->
+            <div class="hf-sect">
+              <h4 class="hf-sect-title">{{ $t('page.host.sect.site') }}</h4>
+              <t-form-item name="host" :label-width="baseLabelWidth">
+                <template #label>
+                  <span>{{ $t('page.host.website') }}</span>
+                  <t-tooltip :content="$t('page.host.host_tips')" placement="top"
+                             :overlay-style="{ width: '240px' }" :delay="200" show-arrow>
+                    <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                  </t-tooltip>
+                </template>
+                <t-input :style="{ width: '400px' }" v-model="formData.host" :placeholder="$t('common.placeholder')" :disabled="isEdit"></t-input>
+              </t-form-item>
+            </div>
+
+            <div class="hf-sect" data-diagnostic-section="listen">
+              <h4 class="hf-sect-title">
+                {{ $t('page.host.sect.listen') }}
+                <small>{{ $t('page.host.sect.listen_desc') }}</small>
+              </h4>
+            <t-form-item :label="$t('page.host.port')" name="port" :label-width="baseLabelWidth">
+              <div class="port-listen-editor">
+                <div class="port-listen-head">
+                  <span class="port-listen-mainflag"></span>
+                  <span class="port-listen-num">{{ $t('page.host.port_listen.col_port') }}</span>
+                  <span class="port-listen-proto">{{ $t('page.host.port_listen.col_proto') }}</span>
+                  <span class="port-listen-ipv" v-if="showPortIpv">
+                    {{ $t('page.host.port_listen.col_ipv') }}
+                    <t-tooltip :content="$t('page.host.port_listen.ipv_tips')" placement="top"
+                               :overlay-style="{ width: '320px' }" :delay="200" show-arrow>
+                      <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                    </t-tooltip>
+                  </span>
+                </div>
+                <div class="port-listen-row" v-for="(row, idx) in portRows" :key="'plrow' + idx">
+                  <span class="port-listen-mainflag">
+                    <t-tag v-if="idx === 0" theme="primary" variant="light" size="small">{{ $t('page.host.port_listen.main') }}</t-tag>
+                  </span>
+                  <t-input-number class="port-listen-num" theme="normal" :min="1" :max="65535"
+                                  v-model="row.port" :placeholder="$t('page.host.port_listen.port_ph')"
+                                  @change="onPortRowsChanged"></t-input-number>
+                  <!-- 协议固定 outline 变体的分段按钮：
+                       ① default-filled 的高亮滑块靠 JS 量元素宽度，弹窗首次渲染时元素还不可见，
+                          算出的滑块会盖住未选中项（表现为"只剩一个按钮、点了没反应"）；
+                       ② 不能用 :options，那条分支渲染的是圆形单选钮，比分段按钮宽一大截会把整行挤出容器 -->
+                  <t-radio-group class="port-listen-proto" variant="outline"
+                                 :value="row.proto" @change="(v) => onProtoChange(row, v)">
+                    <t-radio-button value="http">HTTP</t-radio-button>
+                    <t-radio-button value="https">HTTPS</t-radio-button>
+                  </t-radio-group>
+                  <t-select class="port-listen-ipv" v-if="showPortIpv" v-model="row.ipv" @change="onPortRowsChanged">
+                    <t-option value="both" :label="$t('page.host.port_listen.ipv_both')"></t-option>
+                    <t-option value="ipv4" :label="$t('page.host.port_listen.ipv_v4')"></t-option>
+                    <t-option value="ipv6" :label="$t('page.host.port_listen.ipv_v6')"></t-option>
+                  </t-select>
+                  <t-button v-if="idx > 0" shape="square" variant="outline" theme="danger" size="small"
+                            :title="$t('page.host.port_listen.remove')" @click="removePortRow(idx)">
+                    <t-icon name="delete" />
+                  </t-button>
+                </div>
+                <div class="port-listen-actions">
+                  <t-button variant="dashed" size="small" @click="addPortRow">
+                    + {{ $t('page.host.port_listen.add') }}
+                  </t-button>
+                  <!-- 原先开 SSL 会静默塞一行 80:HTTP，用户不知道为什么多出来。
+                       改成显式勾选项（默认勾上，行为不变），并说明它只为证书的文件验证服务 -->
+                  <span v-if="showAcmePort80" class="port-listen-acme80">
+                    <t-checkbox :checked="acmePort80Checked" @change="onAcmePort80Change">
+                      {{ $t('page.host.port_listen.acme80') }}
+                    </t-checkbox>
+                    <t-tooltip :content="$t('page.host.port_listen.acme80_tips')" placement="top"
+                               :overlay-style="{ width: '340px' }" :delay="200" show-arrow>
+                      <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                    </t-tooltip>
+                  </span>
+                  <!-- IP版本绝大多数站点用默认(IPv4+IPv6)，默认收起这一列；
+                       取消勾选时会把所有行重置回 both，避免留下"看不见却生效"的隐藏设置 -->
+                  <t-checkbox :checked="showPortIpv" @change="onShowPortIpvChange">
+                    {{ $t('page.host.port_listen.show_ipv') }}
+                  </t-checkbox>
+                </div>
+                <div v-if="portHttpsNeedSsl" class="port-listen-hint port-listen-hint-err">
+                  {{ $t('page.host.port_listen.https_need_ssl') }}
+                </div>
+                <div v-if="port80HttpsWarn" class="port-listen-hint port-listen-hint-warn">
+                  {{ $t('page.host.port_listen.port80_https_acme') }}
+                </div>
+                <div v-if="portCheckMsg" class="port-listen-hint port-listen-hint-err">{{ portCheckMsg }}</div>
+                <!-- 「强制80跳转HTTPS」会让引擎隐式占用 80，这一条在端口表里看不到，
+                     不写出来用户会觉得"我没加 80，怎么 80 被占了" -->
+                <div v-if="autoJump80Note" class="port-listen-hint port-listen-hint-warn">
+                  {{ $t('page.host.port_listen.autojump80_note') }}
+                </div>
+                <div class="port-listen-hint">
+                  {{ $t('page.host.port_listen.tips_short') }}
+                  <t-tooltip :content="$t('page.host.port_listen.tips')" placement="top"
+                             :overlay-style="{ width: '360px' }" :delay="200" show-arrow>
+                    <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                  </t-tooltip>
+                </div>
+              </div>
             </t-form-item>
-            <t-form-item :label="$t('page.host.port')" name="port">
-              <t-tooltip class="placement top center"
-                       :content="$t('page.host.port_tips')"
-                       placement="top" :overlay-style="{ width: '200px' }" show-arrow>
-                <t-input-number :style="{ width: '150px' }" v-model="formData.port" :placeholder="$t('page.host.port_placeholder')">
-                </t-input-number>
-              </t-tooltip>
-              <t-tooltip class="placement top center"
-                       :content="$t('page.host.bind_more_port_tips')"
-                       placement="top" :overlay-style="{ width: '200px' }" show-arrow>
-                {{ $t('page.host.bind_more_port')  }} <t-input  :style="{ width: '200px' }" v-model="formData.bind_more_port" :placeholder="$t('page.host.bind_more_port_placeholder')"></t-input>
-              </t-tooltip>
+            <t-form-item name="unrestricted_port" :label-width="baseLabelWidth">
+              <template #label>
+                <span>{{ $t('page.host.unrestricted_port.label_unrestricted_port_is_enable') }}</span>
+                <t-tooltip :content="$t('page.host.unrestricted_port.unrestricted_port_tip')" placement="top"
+                           :overlay-style="{ width: '240px' }" :delay="200" show-arrow>
+                  <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                </t-tooltip>
+              </template>
+              <t-radio-group v-model="formData.unrestricted_port">
+                <t-radio value="0">{{ $t('page.host.unrestricted_port.label_unrestricted_port_is_enable_on') }}</t-radio>
+                <t-radio value="1">{{ $t('page.host.unrestricted_port.label_unrestricted_port_is_enable_off') }}</t-radio>
+              </t-radio-group>
             </t-form-item>
-            <t-form-item :label="$t('page.host.unrestricted_port.label_unrestricted_port_is_enable')" name="unrestricted_port">
-              <t-tooltip class="placement top center" :content="$t('page.host.unrestricted_port.unrestricted_port_tip')" placement="top"
-                         :overlay-style="{ width: '200px' }" show-arrow>
-                <t-radio-group v-model="formData.unrestricted_port">
-                  <t-radio value="0">{{ $t('page.host.unrestricted_port.label_unrestricted_port_is_enable_on') }}</t-radio>
-                  <t-radio value="1">{{ $t('page.host.unrestricted_port.label_unrestricted_port_is_enable_off') }}</t-radio>
-                </t-radio-group>
-              </t-tooltip>
+            </div>
+
+            <div class="hf-sect">
+              <h4 class="hf-sect-title">
+                {{ $t('page.host.sect.cert') }}
+                <span class="hf-sect-extra">
+                  <t-tag v-if="formData.ssl=='1'" :theme="certSummaryTheme" variant="light" size="small">{{ certSummary }}</t-tag>
+                  <t-tag v-else theme="default" variant="light" size="small">{{ $t('page.host.sect.cert_off') }}</t-tag>
+                </span>
+              </h4>
+            <t-form-item name="ssl" :label-width="baseLabelWidth">
+              <template #label>
+                <span>{{ $t('page.host.ssl') }}</span>
+                <t-tooltip :content="$t('page.host.ssl_tips')" placement="top"
+                           :overlay-style="{ width: '240px' }" :delay="200" show-arrow>
+                  <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                </t-tooltip>
+              </template>
+              <t-radio-group v-model="formData.ssl">
+                <t-radio value="0">{{ $t('page.host.ssl_option_no') }}</t-radio>
+                <t-radio value="1">{{ $t('page.host.ssl_option_yes') }}</t-radio>
+              </t-radio-group>
             </t-form-item>
             <!-- SSL配置模式选择 (仅在新增模式且选择SSL时显示) -->
-            <t-form-item :label="$t('page.host.ssl_config_mode')" name="ssl_config_mode" v-if="formData.ssl=='1' && !isEdit">
+            <t-form-item :label="$t('page.host.ssl_config_mode')" name="ssl_config_mode" :label-width="baseLabelWidth" v-if="formData.ssl=='1' && !isEdit">
               <t-radio-group v-model="formData.ssl_config_mode">
                 <t-radio value="existing">{{ $t('page.host.ssl_config_existing') }}</t-radio>
                 <t-radio value="auto_apply">{{ $t('page.host.ssl_config_auto_apply') }}</t-radio>
               </t-radio-group>
             </t-form-item>
-            
+
             <!-- 已有证书选择 (仅在选择"已有证书"模式时显示) -->
-            <t-form-item :label="$t('page.host.ssl_folder')" name="bind_ssl_id" v-if="formData.ssl=='1' && (isEdit || formData.ssl_config_mode === 'existing')">
-              <div style="display: flex; align-items: center;">
+            <t-form-item :label="$t('page.host.ssl_folder')" name="bind_ssl_id" :label-width="baseLabelWidth" v-if="formData.ssl=='1' && (isEdit || formData.ssl_config_mode === 'existing')">
+              <div style="display: flex; align-items: center; width: 100%;">
                 <t-select @change="handleSslChange" :filterable="selectCanFilter" v-model="formData.bind_ssl_id" :placeholder="$t('common.select_placeholder')+$t('page.host.ssl_folder')" style="flex-grow: 1;">
                   <t-option value="" :label="$t('common.select_placeholder')+$t('page.host.ssl_folder')" key=""></t-option>
-                  <t-option v-for="item in sslConfigList" :value="item.id" :label="`${item.domains} (${item.valid_to})`" :key="item.id"></t-option>
+                  <t-option v-for="item in sslOptions" :value="item.value" :label="item.label" :key="item.value"></t-option>
                 </t-select>
 
                 <t-button @click="handleAddNewSsl" style="margin-left: 10px;">{{$t('page.host.add_new_ssl')}}</t-button>
@@ -77,26 +186,7 @@
               </div>
             </t-form-item>
 
-            <t-form-item :label="$t('page.host.start_status')" name="start_status">
-              <t-tooltip class="placement top center" :content="$t('page.host.start_status_content')" placement="top"
-                       :overlay-style="{ width: '200px' }" show-arrow>
-                <t-radio-group v-model="formData.start_status">
-                  <t-radio value="0">{{ $t('page.host.auto_start_on') }}</t-radio>
-                  <t-radio value="1">{{ $t('page.host.auto_start_off') }}</t-radio>
-                </t-radio-group>
-              </t-tooltip>
-            </t-form-item>
-            <t-form-item :label="$t('page.host.log_only_mode')" name="log_only_mode">
-              <t-tooltip class="placement top center" :content="$t('page.host.log_only_mode_tips')" placement="top"
-                       :overlay-style="{ width: '200px' }" show-arrow>
-              <t-radio-group v-model="formData.log_only_mode">
-                <t-radio value="0">{{ $t('page.host.log_only_mode_off') }}</t-radio>
-                <t-radio value="1">{{ $t('page.host.log_only_mode_on') }}</t-radio>
-              </t-radio-group>
-              </t-tooltip>
-            </t-form-item>
-
-            <t-form-item :label="$t('page.host.auto_jump_https.label_autu_jump_https')" name="auto_jump_https" v-if="formData.ssl=='1'">
+            <t-form-item :label="$t('page.host.auto_jump_https.label_autu_jump_https')" name="auto_jump_https" :label-width="baseLabelWidth" v-if="formData.ssl=='1'">
               <t-radio-group v-model="formData.auto_jump_https">
                 <t-radio value="0">{{ $t('page.host.auto_jump_https.label_autu_jump_https_off') }}</t-radio>
                 <t-radio value="1">{{ $t('page.host.auto_jump_https.label_autu_jump_https_on') }}</t-radio>
@@ -129,100 +219,184 @@
               </div>
             </t-form-item>
 
-            <t-form-item :label="$t('page.host.disable_http2.label')" name="disable_http2" v-if="formData.ssl=='1'">
-              <t-tooltip class="placement top center" :content="$t('page.host.disable_http2.tips')" placement="top"
-                       :overlay-style="{ width: '260px' }" show-arrow>
-                <t-radio-group v-model="formData.disable_http2">
-                  <t-radio value="0">{{ $t('page.host.disable_http2.enable') }}</t-radio>
-                  <t-radio value="1">{{ $t('page.host.disable_http2.disable') }}</t-radio>
-                </t-radio-group>
-              </t-tooltip>
+            <t-form-item name="disable_http2" :label-width="baseLabelWidth" v-if="formData.ssl=='1'">
+              <template #label>
+                <span>{{ $t('page.host.disable_http2.label') }}</span>
+                <t-tooltip :content="$t('page.host.disable_http2.tips')" placement="top"
+                           :overlay-style="{ width: '300px' }" :delay="200" show-arrow>
+                  <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                </t-tooltip>
+              </template>
+              <t-radio-group v-model="formData.disable_http2">
+                <t-radio value="0">{{ $t('page.host.disable_http2.enable') }}</t-radio>
+                <t-radio value="1">{{ $t('page.host.disable_http2.disable') }}</t-radio>
+              </t-radio-group>
             </t-form-item>
-            <t-form-item :label="$t('page.host.certfile')" name="certfile" v-if="formData.ssl=='1' && (isEdit || formData.ssl_config_mode === 'existing')">
-              <t-tooltip class="placement top center"
-                       :content="$t('page.host.certfile_content')" placement="top"
-                       :overlay-style="{ width: '200px' }" show-arrow>
-                <t-textarea :style="{ width: '480px' }" v-model="formData.certfile" :placeholder="$t('common.placeholder')"
+            <t-form-item name="certfile" :label-width="baseLabelWidth" v-if="formData.ssl=='1' && (isEdit || formData.ssl_config_mode === 'existing')">
+              <template #label>
+                <span>{{ $t('page.host.certfile') }}</span>
+                <t-tooltip :content="$t('page.host.certfile_content')" placement="top"
+                           :overlay-style="{ width: '260px' }" :delay="200" show-arrow>
+                  <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                </t-tooltip>
+              </template>
+              <t-textarea :style="{ width: '400px' }" v-model="formData.certfile" :placeholder="$t('common.placeholder')"
                           name="certfile">
-                </t-textarea>
-              </t-tooltip>
+              </t-textarea>
             </t-form-item>
-            <t-form-item :label="$t('page.host.keyfile')" name="keyfile" v-if="formData.ssl=='1' && (isEdit || formData.ssl_config_mode === 'existing')">
-              <t-tooltip class="placement top center"
-                         :content="$t('page.host.keyfile_content')" placement="top"
-                         :overlay-style="{ width: '200px' }" show-arrow>
-                <t-textarea :style="{ width: '480px' }" v-model="formData.keyfile" :placeholder="$t('common.placeholder')" name="keyfile">
-                </t-textarea>
-              </t-tooltip>
+            <t-form-item name="keyfile" :label-width="baseLabelWidth" v-if="formData.ssl=='1' && (isEdit || formData.ssl_config_mode === 'existing')">
+              <template #label>
+                <span>{{ $t('page.host.keyfile') }}</span>
+                <t-tooltip :content="$t('page.host.keyfile_content')" placement="top"
+                           :overlay-style="{ width: '260px' }" :delay="200" show-arrow>
+                  <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                </t-tooltip>
+              </template>
+              <t-textarea :style="{ width: '400px' }" v-model="formData.keyfile" :placeholder="$t('common.placeholder')" name="keyfile">
+              </t-textarea>
             </t-form-item>
-            <t-form-item :label="$t('page.host.loadbalance.label_loadbalance_is_enable')" name="is_enable_load_balance">
+            </div>
+
+            <div class="hf-sect" data-diagnostic-section="backend">
+              <h4 class="hf-sect-title">
+                {{ $t('page.host.sect.backend') }}
+                <small>{{ $t('page.host.sect.backend_desc') }}</small>
+              </h4>
+            <t-form-item :label="$t('page.host.loadbalance.label_loadbalance_is_enable')" name="is_enable_load_balance" :label-width="baseLabelWidth">
               <t-radio-group v-model="formData.is_enable_load_balance">
                 <t-radio value="0">{{ $t('page.host.loadbalance.label_is_enable_load_balance_off') }} </t-radio>
                 <t-radio value="1">{{ $t('page.host.loadbalance.label_is_enable_load_balance_on') }}</t-radio>
               </t-radio-group>
             </t-form-item>
 
-            <t-form-item :label="$t('page.host.loadbalance.label_loadbalance_type')" name="load_balance_stage" v-if="formData.is_enable_load_balance=='1'">
+            <t-form-item :label="$t('page.host.loadbalance.label_loadbalance_type')" name="load_balance_stage" :label-width="baseLabelWidth" v-if="formData.is_enable_load_balance=='1'">
               <t-radio-group v-model="formData.load_balance_stage">
                 <t-radio value="1">{{ $t('page.host.loadbalance.label_loadbalance_type_weight_round_robin') }} </t-radio>
                 <t-radio value="2">{{ $t('page.host.loadbalance.label_loadbalance_type_ip_hash') }}</t-radio>
               </t-radio-group>
             </t-form-item>
 
-            <t-form-item name="loadbalance" v-if="formData.is_enable_load_balance=='1'">
+            <t-form-item :label="$t('page.host.loadbalance.label_backend_list')" name="loadbalance" :label-width="baseLabelWidth" v-if="formData.is_enable_load_balance=='1'">
               <load-balance :propHostCode="formData.code"></load-balance>
             </t-form-item>
 
-            <t-form-item :label="$t('page.host.remote_host')" name="remote_host">
-              <t-tooltip
-                class="placement top center"
-                :content="$t('page.host.remote_host_content')"
-                placement="top"
-                :overlay-style="{ width: '200px' }"
-                show-arrow>
-                <t-input :style="{ width: '480px' }" v-model="formData.remote_host" :placeholder="$t('common.placeholder')+$t('page.host.remote_host')"></t-input>
-              </t-tooltip>
+            <t-form-item name="remote_host" :label-width="baseLabelWidth">
+              <template #label>
+                <span>{{ $t('page.host.remote_host') }}</span>
+                <t-tooltip :content="$t('page.host.remote_host_content')" placement="top"
+                           :overlay-style="{ width: '260px' }" :delay="200" show-arrow>
+                  <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                </t-tooltip>
+              </template>
+              <t-input :style="{ width: '400px' }" v-model="formData.remote_host" :placeholder="$t('common.placeholder')+$t('page.host.remote_host')"></t-input>
             </t-form-item>
 
-            <t-form-item :label="$t('page.host.is_trans_back_domain')" name="is_trans_back_domain">
-              <t-tooltip
-                class="placement top center"
-                :content="$t('page.host.is_trans_back_domain_content')"
-                placement="top"
-                :overlay-style="{ width: '200px' }"
-                show-arrow>
-                <t-radio-group v-model="formData.is_trans_back_domain">
-                  <t-radio value="0">{{ $t('common.off') }}</t-radio>
-                  <t-radio value="1">{{ $t('common.on') }}</t-radio>
-                </t-radio-group>
-              </t-tooltip>
-            </t-form-item>
-
-            <t-form-item :label="$t('page.host.remote_ip')" name="remote_ip" v-if="formData.is_enable_load_balance!='1'">
-              <t-tooltip class="placement top center" :content="$t('page.host.remote_ip_content')"
-                       placement="top" :overlay-style="{ width: '200px' }" show-arrow>
-                <t-input :style="{ width: '480px' }" v-model="formData.remote_ip" :placeholder="$t('common.placeholder')+$t('page.host.remote_ip')"></t-input>
-              </t-tooltip>
-            </t-form-item>
-
-            <t-form-item :label="$t('page.host.remote_port')" name="remote_port" v-if="formData.is_enable_load_balance!='1'">
-              <t-tooltip class="placement top center"
-                       :content="$t('page.host.remote_port_content')" placement="top"
-                       :overlay-style="{ width: '200px' }" show-arrow>
-                <t-input-number :style="{ width: '150px' }" v-model="formData.remote_port"
-                              :placeholder="$t('page.host.port_placeholder')">
+            <!-- 后端IP 与 后端端口 并成一行显示；两者各自保留 form-item 与 name，校验提示才能分别落到对应输入框 -->
+            <div class="hf-inline-pair" v-if="formData.is_enable_load_balance!='1'">
+              <t-form-item name="remote_ip" :label-width="baseLabelWidth">
+                <template #label>
+                  <span>{{ $t('page.host.remote_ip') }}</span>
+                  <t-tooltip :content="$t('page.host.remote_ip_content')" placement="top"
+                             :overlay-style="{ width: '260px' }" :delay="200" show-arrow>
+                    <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                  </t-tooltip>
+                </template>
+                <t-input :style="{ width: '250px' }" v-model="formData.remote_ip" :placeholder="$t('common.placeholder')+$t('page.host.remote_ip')"></t-input>
+              </t-form-item>
+              <t-form-item name="remote_port" :label-width="64">
+                <template #label>
+                  <span>{{ $t('page.host.port_listen.port_ph') }}</span>
+                  <t-tooltip :content="$t('page.host.remote_port_content')" placement="top"
+                             :overlay-style="{ width: '260px' }" :delay="200" show-arrow>
+                    <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                  </t-tooltip>
+                </template>
+                <t-input-number :style="{ width: '130px' }" theme="normal" v-model="formData.remote_port"
+                                :placeholder="$t('page.host.port_listen.port_ph')">
                 </t-input-number>
-              </t-tooltip>
+              </t-form-item>
+            </div>
+
+            <t-form-item name="is_trans_back_domain" :label-width="baseLabelWidth">
+              <template #label>
+                <span>{{ $t('page.host.is_trans_back_domain') }}</span>
+                <t-tooltip trigger="click" placement="top" :overlay-style="{ maxWidth: 'min(460px, calc(100vw - 32px))' }" show-arrow>
+                  <template #content>
+                    <div class="backend-host-help-text">
+                      <p>{{ $t('page.host.is_trans_back_domain_content') }}</p>
+                      <p>{{ $t('page.host.is_trans_back_domain_example') }}</p>
+                      <p>{{ $t('page.host.is_trans_back_domain_example_off') }}</p>
+                      <p>{{ $t('page.host.is_trans_back_domain_example_on') }}</p>
+                      <p>{{ $t('page.host.is_trans_back_domain_forwarded_hint') }}</p>
+                    </div>
+                  </template>
+                  <t-button variant="text" size="small" shape="square" :aria-label="$t('page.host.is_trans_back_domain')">
+                    <t-icon name="help-circle" />
+                  </t-button>
+                </t-tooltip>
+              </template>
+              <t-radio-group v-model="formData.is_trans_back_domain">
+                <t-radio value="0">{{ $t('common.off') }}</t-radio>
+                <t-radio value="1">{{ $t('common.on') }}</t-radio>
+              </t-radio-group>
+            </t-form-item>
+            </div>
+
+            <div class="hf-sect">
+              <h4 class="hf-sect-title">{{ $t('page.host.sect.runtime') }}</h4>
+            <t-form-item name="start_status" :label-width="baseLabelWidth">
+              <template #label>
+                <span>{{ $t('page.host.start_status') }}</span>
+                <t-tooltip :content="$t('page.host.start_status_content')" placement="top"
+                           :overlay-style="{ width: '240px' }" :delay="200" show-arrow>
+                  <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                </t-tooltip>
+              </template>
+              <t-radio-group v-model="formData.start_status">
+                <t-radio value="0">{{ $t('page.host.auto_start_on') }}</t-radio>
+                <t-radio value="1">{{ $t('page.host.auto_start_off') }}</t-radio>
+              </t-radio-group>
+            </t-form-item>
+            <t-form-item name="log_only_mode" :label-width="baseLabelWidth">
+              <template #label>
+                <span>{{ $t('page.host.log_only_mode') }}</span>
+                <t-tooltip :content="$t('page.host.log_only_mode_tips')" placement="top"
+                           :overlay-style="{ width: '240px' }" :delay="200" show-arrow>
+                  <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
+                </t-tooltip>
+              </template>
+              <t-radio-group v-model="formData.log_only_mode">
+                <t-radio value="0">{{ $t('page.host.log_only_mode_off') }}</t-radio>
+                <t-radio value="1">{{ $t('page.host.log_only_mode_on') }}</t-radio>
+              </t-radio-group>
+            </t-form-item>
+            </div>
+
+            <div class="hf-sect hf-sect-last">
+              <h4 class="hf-sect-title">
+                {{ $t('page.host.sect.meta') }}
+                <small>{{ $t('page.host.sect.meta_desc') }}</small>
+              </h4>
+            <t-form-item :label="$t('page.host.nickname')" name="nickname" :label-width="baseLabelWidth">
+              <t-input :style="{ width: '400px' }" v-model="formData.nickname" :placeholder="$t('page.host.nickname_placeholder')"></t-input>
             </t-form-item>
 
-            <t-form-item :label="$t('page.host.nickname')" name="nickname">
-              <t-input :style="{ width: '480px' }" v-model="formData.nickname" :placeholder="$t('page.host.nickname_placeholder')"></t-input>
+            <t-form-item :label="$t('page.host.group.belong_group')" name="group_code" :label-width="baseLabelWidth">
+              <t-select :style="{ width: '400px' }" v-model="formData.group_code" clearable
+                        :placeholder="$t('page.host.group.belong_group_placeholder')">
+                <t-option v-for="g in hostGroups" :key="g.group_code" :value="g.group_code" :label="g.group_name">
+                  <i class="hg-form-dot" :style="{ background: g.color }"></i>{{ g.group_name }}
+                </t-option>
+              </t-select>
+              <a class="hg-form-new" @click="openGroupQuickAdd()">＋ {{ $t('page.host.group.new_group') }}</a>
+              <div class="hg-form-tip">{{ $t('page.host.group.belong_group_tip') }}</div>
             </t-form-item>
 
-            <t-form-item :label="$t('common.remarks')" name="remarks">
-              <t-textarea :style="{ width: '480px' }" v-model="formData.remarks" :placeholder="$t('common.placeholder_content')" name="remarks">
+            <t-form-item :label="$t('common.remarks')" name="remarks" :label-width="baseLabelWidth">
+              <t-textarea :style="{ width: '400px' }" v-model="formData.remarks" :placeholder="$t('common.placeholder_content')" name="remarks">
               </t-textarea>
             </t-form-item>
+            </div>
           </t-tab-panel>
 
           <t-tab-panel :value="2">
@@ -291,7 +465,7 @@
               <template #label>
                 <span>{{ $t('page.host.ip_mode') }}</span>
                 <t-tooltip class="placement top center" :content="$t('page.host.ip_mode_tips')" placement="top"
-                           :overlay-style="{ width: '300px' }" show-arrow>
+                           :overlay-style="{ width: '300px' }" :delay="200" show-arrow>
                   <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
                 </t-tooltip>
               </template>
@@ -316,7 +490,7 @@
               <template #label>
                 <span>{{ $t('page.host.ip_source_mode') }}</span>
                 <t-tooltip class="placement top center" :content="$t('page.host.ip_source_mode_tips')" placement="top"
-                           :overlay-style="{ width: '340px' }" show-arrow>
+                           :overlay-style="{ width: '340px' }" :delay="200" show-arrow>
                   <t-icon name="help-circle" class="host-form-ip-mode-help-icon" />
                 </t-tooltip>
               </template>
@@ -415,7 +589,15 @@
                 </t-textarea>
               </t-tooltip>
             </t-form-item>
-            <t-form-item :label="$t('page.host.insecure_skip_verify')" name="insecure_skip_verify">
+            <t-form-item :label="$t('page.host.exclude_ip_log')" name="exclude_ip_log">
+              <t-tooltip class="placement top center" :content="$t('page.host.exclude_ip_log_tips')" placement="top"
+                       :overlay-style="{ width: '260px' }" show-arrow>
+                <t-textarea :style="{ width: '480px' }" v-model="formData.exclude_ip_log" :placeholder="$t('page.host.exclude_ip_log_tips')"
+                          name="exclude_ip_log">
+                </t-textarea>
+              </t-tooltip>
+            </t-form-item>
+            <t-form-item :label="$t('page.host.insecure_skip_verify')" name="insecure_skip_verify" data-diagnostic-section="tls">
               <t-tooltip class="placement top center"
                          :content="$t('page.host.insecure_skip_verify_tips')" placement="top"
                          :overlay-style="{ width: '200px' }" show-arrow>
@@ -498,8 +680,64 @@
                 </t-input>
               </t-tooltip>
             </t-form-item>
+            <t-form-item v-if="formData.is_enable_http_auth_base === '1'" :label="$t('page.host.http_auth_path_scope')">
+              <t-tooltip class="placement top center" :content="$t('page.host.http_auth_path_scope_tips')" placement="top"
+                       :overlay-style="{ width: '420px' }" show-arrow>
+                <t-radio-group v-model="httpAuthConfigData.path_scope">
+                  <t-radio value="all">{{$t('page.host.http_auth_path_scope_all')}}</t-radio>
+                  <t-radio value="include">{{$t('page.host.http_auth_path_scope_include')}}</t-radio>
+                  <t-radio value="exclude">{{$t('page.host.http_auth_path_scope_exclude')}}</t-radio>
+                </t-radio-group>
+              </t-tooltip>
+            </t-form-item>
+            <t-form-item v-if="formData.is_enable_http_auth_base === '1' && httpAuthConfigData.path_scope !== 'all'" :label="$t('page.host.http_auth_paths')">
+              <t-tooltip class="placement top center" :content="$t('page.host.http_auth_paths_tips')" placement="top"
+                       :overlay-style="{ width: '500px' }" show-arrow>
+                <t-textarea v-model="httpAuthConfigData.paths" :placeholder="$t('page.host.http_auth_paths_ph')"
+                            :autosize="{ minRows: 3, maxRows: 8 }" :style="{ width: '480px' }"/>
+              </t-tooltip>
+            </t-form-item>
+            <t-form-item v-if="formData.is_enable_http_auth_base === '1'" :label="$t('page.host.http_auth_bypass_ip_group')">
+              <t-tooltip class="placement top center" :content="$t('page.host.http_auth_bypass_ip_group_tips')" placement="top"
+                       :overlay-style="{ width: '400px' }" show-arrow>
+                <t-select v-model="httpAuthConfigData.bypass_ip_group" clearable filterable :style="{ width: '480px' }"
+                          :placeholder="$t('common.select_placeholder')">
+                  <t-option v-for="g in ipGroupOptions" :key="g.group_code" :value="g.group_code" :label="g.group_name"></t-option>
+                </t-select>
+              </t-tooltip>
+            </t-form-item>
+            <t-form-item v-if="formData.is_enable_http_auth_base === '1'" :label="$t('page.host.http_auth_session_ttl')">
+              <t-tooltip class="placement top center" :content="$t('page.host.http_auth_session_ttl_tips')" placement="top"
+                       :overlay-style="{ width: '400px' }" show-arrow>
+                <t-input-number v-model="httpAuthConfigData.session_ttl" theme="column" :min="1" :max="525600"
+                                :style="{ width: '180px' }"/>
+              </t-tooltip>
+              <span style="margin-left:8px;color:#888;">{{$t('page.host.unit_minute')}}</span>
+            </t-form-item>
+            <t-form-item v-if="formData.is_enable_http_auth_base === '1'" :label="$t('page.host.http_auth_idle_timeout')">
+              <t-tooltip class="placement top center"
+                       :content="formData.http_auth_base_type === 'custom' ? $t('page.host.http_auth_idle_timeout_tips') : $t('page.host.http_auth_idle_timeout_unsupported')"
+                       placement="top" :overlay-style="{ width: '400px' }" show-arrow>
+                <t-input-number v-model="httpAuthConfigData.idle_timeout" theme="column" :min="0" :max="525600"
+                                :disabled="formData.http_auth_base_type !== 'custom'"
+                                :style="{ width: '180px' }"/>
+              </t-tooltip>
+              <span style="margin-left:8px;color:#888;">{{$t('page.host.http_auth_idle_timeout_hint')}}</span>
+            </t-form-item>
+            <t-form-item v-if="formData.is_enable_http_auth_base === '1'" :label="$t('page.host.http_auth_bind_ip')">
+              <t-tooltip class="placement top center" :content="$t('page.host.http_auth_bind_ip_tips')" placement="top"
+                       :overlay-style="{ width: '450px' }" show-arrow>
+                <t-radio-group v-model="httpAuthConfigData.bind_ip">
+                  <t-radio value="0">{{$t('common.off')}}</t-radio>
+                  <t-radio value="1">{{$t('common.on')}}</t-radio>
+                </t-radio-group>
+              </t-tooltip>
+            </t-form-item>
             <t-form-item v-if="formData.is_enable_http_auth_base === '1'">
               <http-auth-base :propHostCode="formData.code"></http-auth-base>
+            </t-form-item>
+            <t-form-item v-if="formData.is_enable_http_auth_base === '1' && formData.code">
+              <http-auth-session :propHostCode="formData.code"></http-auth-session>
             </t-form-item>
           </t-tab-panel>
 
@@ -508,7 +746,11 @@
               <t-icon name="activity" style="margin-right: 4px;color:#00a870"/>
               {{$t('page.host.tab_health_check')}}
             </template>
-            <healthy-config :healthy-config="healthyConfigData" @update="val => healthyConfigData = val"></healthy-config>
+            <healthy-config :healthy-config="healthyConfigData" @update="val => healthyConfigData = val"
+                            @test="testHealth" :test-loading="healthTestLoading" :test-results="healthTestResults"
+                            :test-total="healthTestTotal" :test-stale="healthTestStale" :test-error="healthTestError"
+                            :test-expected-codes="healthTestExpectedCodes"
+                            :load-balance-enabled="formData.is_enable_load_balance == '1'"></healthy-config>
           </t-tab-panel>
 
           <t-tab-panel :value="7">
@@ -648,14 +890,31 @@
                             :host-name="formData.host" :can-use-header="true"
                             @use-header="useProbeHeader" />
 
+    <!-- 就地新建分组：省得先跳去列表页建好再回来 -->
+    <t-dialog :visible.sync="groupQuickAddVisible" :header="$t('page.host.group.new_group')" :width="440"
+              :confirm-btn="$t('common.confirm')" :cancel-btn="$t('common.cancel')" @confirm="saveGroupQuickAdd">
+      <t-form :label-width="90" colon>
+        <t-form-item :label="$t('page.host.group.name')">
+          <t-input v-model="groupQuickAdd.group_name" :maxlength="50" :placeholder="$t('page.host.group.name_placeholder')" />
+        </t-form-item>
+        <t-form-item :label="$t('page.host.group.color')">
+          <div class="hg-form-colors">
+            <i v-for="c in groupColorOptions" :key="c" :class="{ on: groupQuickAdd.color === c }"
+               :style="{ background: c }" @click="groupQuickAdd.color = c"></i>
+          </div>
+        </t-form-item>
+      </t-form>
+    </t-dialog>
   </div>
 </template>
 
   <script lang="ts">
   import Vue from 'vue';
   import { FileSafetyIcon } from 'tdesign-icons-vue';
+  import { checkHostPorts, testHostHealth } from '@/apis/host';
   import LoadBalance from "../../loadbalance/index.vue";
   import HttpAuthBase from "../../http_auth_base/index.vue";
+  import HttpAuthSession from "../../http_auth_session/index.vue";
   import HealthyConfig from '../components/HealthyConfig.vue';
   import CaptchaConfig from '../components/CaptchaConfig.vue';
   import StaticSiteConfig from '../components/StaticSiteConfig.vue';
@@ -673,11 +932,13 @@
   import UploadSecurityConfig from '../components/UploadSecurityConfig.vue';
   import PathRuleConfig from '../components/PathRuleConfig.vue';
   import SslForm from '../components/SslForm.vue';
-  import { INITIAL_HEALTHY, INITIAL_CAPTCHA, INITIAL_ANTILEECH,INITIAL_SSL_DATA,INITIAL_CACHE,INITIAL_STATIC_SITE,INITIAL_TRANSPORT,INITIAL_CUSTOM_HEADERS,INITIAL_CUSTOM_RESPONSE_HEADERS,INITIAL_RESPONSE_COMPRESS,INITIAL_COOKIE_SECURITY,INITIAL_CSRF,INITIAL_ACCESS,INITIAL_TAMPER,INITIAL_UPLOAD_SECURITY,DEFAULT_STATIC_SECURITY_HEADERS } from '../constants';
+  import { INITIAL_HEALTHY, INITIAL_CAPTCHA, INITIAL_ANTILEECH,INITIAL_SSL_DATA,INITIAL_CACHE,INITIAL_STATIC_SITE,INITIAL_TRANSPORT,INITIAL_CUSTOM_HEADERS,INITIAL_CUSTOM_RESPONSE_HEADERS,INITIAL_RESPONSE_COMPRESS,INITIAL_COOKIE_SECURITY,INITIAL_CSRF,INITIAL_ACCESS,INITIAL_HTTP_AUTH,INITIAL_TAMPER,INITIAL_UPLOAD_SECURITY,DEFAULT_STATIC_SECURITY_HEADERS } from '../constants';
   import {sslConfigListApi,sslConfigAddApi,sslConfigEditApi,sslConfigDetailApi} from '@/apis/sslconfig';
   import {getOrDefault} from '@/utils/usuallytool';
   import {get_detail_by_item_api, edit_system_config_by_item_api} from '@/apis/systemconfig';
   import {wafCDNProviderInfoApi} from '@/apis/cdnip';
+  import {addHostGroup} from '@/apis/hostgroup';
+  import {wafIPGroupOptionsApi} from '@/apis/ipgroup';
   import IpSourceProbeDialog from '../components/IpSourceProbeDialog.vue';
   export default Vue.extend({
     name: 'HostForm',
@@ -685,6 +946,7 @@
       FileSafetyIcon,
       LoadBalance,
       HttpAuthBase,
+      HttpAuthSession,
       HealthyConfig,
       CaptchaConfig,
       AntiLeechConfig,
@@ -729,17 +991,51 @@
         type: String,
         default: ''
       },
+      // 所属分组下拉数据，由父页面统一维护并下发。
+      // 走 prop 而不是本组件自己拉：弹窗只 created 一次，自己拉的话左栏新建的分组要刷新页面才看得到。
+      hostGroups: {
+        type: Array,
+        default: () => []
+      },
       // 打开时定位到哪个配置 Tab（1基础内容 4其他配置），供外部深链使用
       initTab: {
         type: Number,
         default: 0
+      },
+      initSection: {
+        type: String,
+        default: ''
+      },
+      // 所在弹窗是否可见。弹窗内容只 created 一次，不下发这个开关的话，
+      // 在证书申请页新签发的证书，回到列表再打开编辑时下拉里仍然没有（只剩一串ID）
+      dialogVisible: {
+        type: Boolean,
+        default: false
       }
     },
     data() {
       return {
+        groupColorOptions: ['#0052D9', '#2BA471', '#E37318', '#D54941', '#834EC2', '#0594FA', '#8B8B8B', '#D4A017'],
+        groupQuickAddVisible: false,
+        groupQuickAdd: { group_name: '', color: '#0052D9' },
         cdnProviderInfo: null, // 所选 CDN 厂商中心库状态(只读展示)
         ipProbeVisible: false,   // 真实IP来源诊断弹窗
         globalProxyHeader: '',   // 全局「获取访客IP头信息」(兼容模式下本站实际沿用的值)
+        // 端口监听行（issue #955）：第一行为主端口。编辑态未动过端口区则提交时不携带
+        // port_listens_json，保持库里空值=按老规则派生
+        portRows: [],
+        portRowsDirty: false,
+        portCheckMsg: '',
+        portCheckTimer: null,
+        // 是否显示端口行的「IP 版本」列。默认隐藏(等同 IPv4+IPv6)，
+        // 载入时若已有行不是 both 则自动展开，保证既有配置不会被藏起来
+        showPortIpv: false,
+        // 用户是否手动取消了「添加 80 端口」。只影响开 SSL 时要不要自动补 80，
+        // 勾选状态本身由端口表推导(acmePort80Checked)
+        acme80OptOut: false,
+        // 「基础内容」分节后标签统一 150px：最长的"后端IP(动态域名)""是否传递后端域名"
+        // 加上后面的 ⓘ 图标正好一行放下(再窄图标会被右侧控件盖住)。其余 Tab 仍用 t-form 的 230。
+        baseLabelWidth: 150,
         formData: {
           ...JSON.parse(JSON.stringify(this.value)),
           // SSL配置模式字段，默认为已有证书
@@ -759,11 +1055,23 @@
         },
         // 健康度检测配置
         healthyConfigData: { ...INITIAL_HEALTHY },
+        healthTestLoading: false,
+        healthTestResults: [],
+        healthTestTotal: 0,
+        healthTestStale: false,
+        healthTestError: '',
+        healthTestExpectedCodes: '',
+        healthTestGeneration: 0,
+        healthTestController: null as AbortController | null,
+        healthTestSnapshot: '',
         // 验证码配置
         captchaConfigData: { ...INITIAL_ANTILEECH },
         // 防恶意链接配置
         antiLeechConfigData: {...INITIAL_CAPTCHA },
         cacheConfigData: { ...INITIAL_CACHE },
+        httpAuthConfigData: { ...INITIAL_HTTP_AUTH },
+        // 网站密码访问「免密IP组」下拉的选项，弹窗每次打开时重拉
+        ipGroupOptions: [],
         staticSiteConfigData: {...INITIAL_STATIC_SITE},
         transportConfigData: {...INITIAL_TRANSPORT},
         customHeadersConfigData: {...INITIAL_CUSTOM_HEADERS},
@@ -775,8 +1083,10 @@
         tamperConfigData: { ...INITIAL_TAMPER },
         uploadSecurityConfigData: { ...INITIAL_UPLOAD_SECURITY },
         activeTab: 1, // 当前激活的配置 Tab（受控，供防御总览开关「配置详情」跳转/外部深链，见 initTab watch）
+        diagnosticScrollTimer: null,
         // Tab 布局：left=竖向（默认），top=横向；用户偏好持久化到 localStorage
         tabPlacement: localStorage.getItem('samwaf_host_tab_placement') === 'top' ? 'top' : 'left',
+        isFullscreen: localStorage.getItem('samwaf_host_form_fullscreen') === '1',
         rules: {
           host: [{required: true,message: this.$t('common.placeholder')+this.$t('page.host.host'), type: 'error'},
             {
@@ -854,6 +1164,67 @@
       };
     },
     computed: {
+      healthTestConfigKey() {
+        const { code, host, remote_host, remote_ip, remote_port, is_enable_load_balance, is_trans_back_domain } = this.formData;
+        return JSON.stringify({ code, host, remote_host, remote_ip, remote_port, is_enable_load_balance,
+          is_trans_back_domain, healthy: this.healthyConfigData });
+      },
+      // 证书夹下拉项。绑定ID在证书夹里找不到时（条目已被删除等）补一条同值选项，
+      // 否则 t-select 直接把原始ID显示出来，看着像是没加载
+      sslOptions() {
+        const list = this.sslConfigList.map(item => ({
+          value: item.id,
+          label: `${item.domains} (${item.valid_to})`
+        }));
+        const bindId = this.formData.bind_ssl_id;
+        if (bindId && !list.some(item => item.value === bindId)) {
+          list.unshift({ value: bindId, label: this.$t('page.host.ssl_folder_missing') });
+        }
+        return list;
+      },
+      // 证书小节标题右侧的一句话摘要：不展开也能看出绑的是哪张证书、什么时候到期
+      certSummary() {
+        const hit = this.sslConfigList.find(item => item.id === this.formData.bind_ssl_id);
+        if (hit) {
+          return `${hit.domains} (${hit.valid_to})`;
+        }
+        if (this.formData.bind_ssl_id) {
+          return this.$t('page.host.sect.cert_missing');
+        }
+        return this.$t('page.host.sect.cert_unbound');
+      },
+      // 绑定的证书夹条目已不存在时用告警色，别拿绿色标签把这事盖过去
+      certSummaryTheme() {
+        const bindId = this.formData.bind_ssl_id;
+        if (bindId && !this.sslConfigList.some(item => item.id === bindId)) {
+          return 'warning';
+        }
+        return 'success';
+      },
+      // 只有存在 HTTPS 端口、且主端口本身不是 80 时才需要这个勾选项：
+      // 主端口就是 80 的话 http01 直接用主端口即可，不用再补一行
+      showAcmePort80() {
+        const main = this.portRows[0];
+        return this.portRows.some(r => r.proto === 'https') && Number(main && main.port) !== 80;
+      },
+      // 勾选状态直接由端口表推导，用户手工删掉 80 行时勾也会自动落下，不会两处打架
+      acmePort80Checked() {
+        return this.portRows.some(r => Number(r.port) === 80 && r.proto === 'http');
+      },
+      // 开了「强制80跳转HTTPS」但端口表里没有 80：引擎会隐式占用 80 做跳转，得说明白
+      autoJump80Note() {
+        return String(this.formData.ssl) === '1' && String(this.formData.auto_jump_https) === '1'
+          && !this.portRows.some(r => Number(r.port) === 80);
+      },
+      // 有端口声明为 HTTPS 但 SSL 证书开关未开：保存会被后端拒绝，这里提前提示
+      portHttpsNeedSsl() {
+        return this.portRows.some(r => r.proto === 'https') && this.formData.ssl !== '1';
+      },
+      // 80 端口被声明为 HTTPS 时，ACME 的 http01 文件验证（申请/续期）必然失败：
+      // Let's Encrypt 是明文 HTTP 打 80 端口。这里只提示不拦，用 DNS 验证的用户不受影响。
+      port80HttpsWarn() {
+        return this.portRows.some(r => Number(r.port) === 80 && r.proto === 'https');
+      },
       // 真实IP来源：随所选模式返回对应解释文案(显示在下拉框下方)
       ipSourceModeDesc() {
         const map = {
@@ -945,6 +1316,12 @@
       }
     },
     watch: {
+      healthTestConfigKey() {
+        if (this.healthTestSnapshot && this.healthTestSnapshot !== this.healthTestConfigKey) {
+          this.cancelHealthTest();
+          this.healthTestStale = true;
+        }
+      },
       // 外部深链(如访问日志"IP提取有问题?"跳过来)指定要定位的 Tab。
       // 组件实例在弹窗打开前就已创建，data() 里取一次是取不到的，必须 watch。
       initTab: {
@@ -952,6 +1329,17 @@
         handler(val) {
           if (val > 0) this.activeTab = val;
         },
+      },
+      initSection() { this.scrollToDiagnosticSection(); },
+      // 每次打开弹窗都重新拉一次证书夹：组件只 created 一次，
+      // 期间在证书申请/证书夹页面新增的证书，不刷新的话这里永远看不到
+      dialogVisible(val) {
+        this.resetHealthTest();
+        if (val) {
+          this.getSslFolderList();
+          this.getIpGroupOptions();
+          this.scrollToDiagnosticSection();
+        }
       },
       // 切换 Tab 后把内容区和弹窗滚动位置复位到顶部，避免左侧导航过长时右侧内容"看起来是空的"
       activeTab() {
@@ -964,6 +1352,7 @@
       },
       value: {
         handler(newVal) {
+          this.resetHealthTest();
           this.formData = {
             ...JSON.parse(JSON.stringify(newVal)),
             // 确保ssl_config_mode字段存在
@@ -987,6 +1376,9 @@
           // 保证存在且为合法值，并用 $set 确保 Vue2 对新增字段的响应式
           const ipMode = this.formData.ip_mode === 'proxy' ? 'proxy' : 'nic'
           this.$set(this.formData, 'ip_mode', ipMode)
+
+          // 端口监听行初始化（issue #955）
+          this.initPortRows(newVal)
 
           // 解析防御配置
           if (this.formData.defense_json) {
@@ -1046,7 +1438,9 @@
                 that.captchaConfigData.path_prefix = getOrDefault(that.captchaConfigData, "path_prefix", "");
                 that.captchaConfigData.expire_time = getOrDefault(that.captchaConfigData, "expire_time", 24);
                 that.captchaConfigData.ip_mode = getOrDefault(that.captchaConfigData, "ip_mode", "nic");
-                that.captchaConfigData.engine_type = getOrDefault(that.captchaConfigData, "engine_type", "default");
+                // 兜底值必须是引擎认得的取值。写 "default" 会存进 captcha_json，
+                // 而引擎按验证方式分发挑战页时只认 traditional / capJs，取到别的值就发不出挑战。
+                that.captchaConfigData.engine_type = getOrDefault(that.captchaConfigData, "engine_type", "traditional");
                 if ( that.captchaConfigData.cap_js_config == null){
                   that.captchaConfigData.cap_js_config = {
                     challengeCount: 50,
@@ -1199,6 +1593,37 @@
             this.antiLeechConfigData = { ...INITIAL_ANTILEECH };
           }
 
+          // 解析网站密码访问的时效配置。
+          // 空串是存量站点的常态，此时必须落到 INITIAL_HTTP_AUTH（等价现状），不能是空对象——
+          // 空对象会让输入框显示空白，用户一保存就把 0 提交上去，等于所有人一登录就掉线。
+          if (this.formData.http_auth_json) {
+            try {
+              let that = this;
+              if (that.formData.http_auth_json != "") {
+                let parsed = JSON.parse(that.formData.http_auth_json);
+                that.httpAuthConfigData = {
+                  session_ttl: (parsed.session_ttl || INITIAL_HTTP_AUTH.session_ttl).toString(),
+                  idle_timeout: (parsed.idle_timeout || 0).toString(),
+                  // bind_ip 是显式三态：给了 0 就是用户主动关掉，不能当缺省再拉回 1；
+                  // 但整份 JSON 没这个键时（老配置）必须保持 1
+                  bind_ip: (parsed.bind_ip === undefined || parsed.bind_ip === null
+                    ? 1 : parsed.bind_ip).toString(),
+                  // 保护范围同理：老配置没有这些键 → 整站(等价现状)；非法值也回落整站，与后端 Decode 口径一致
+                  path_scope: (parsed.path_scope === 'include' || parsed.path_scope === 'exclude')
+                    ? parsed.path_scope : 'all',
+                  paths: (typeof parsed.paths === 'string' ? parsed.paths : ''),
+                  bypass_ip_group: (typeof parsed.bypass_ip_group === 'string' ? parsed.bypass_ip_group : '')
+                };
+              } else {
+                that.httpAuthConfigData = { ...INITIAL_HTTP_AUTH };
+              }
+            } catch (e) {
+              this.httpAuthConfigData = { ...INITIAL_HTTP_AUTH };
+            }
+          } else {
+            this.httpAuthConfigData = { ...INITIAL_HTTP_AUTH };
+          }
+
           // 解析缓存配置
           if (this.formData.cache_json) {
             try {
@@ -1297,6 +1722,10 @@
                 require_otp: String(ac.require_otp !== undefined ? ac.require_otp : 0),
                 unauth_action: ac.unauth_action != null ? ac.unauth_action : '',
                 allow_ip_group_code: ac.allow_ip_group_code != null ? ac.allow_ip_group_code : '',
+                cors_allow_origins: ac.cors_allow_origins != null ? ac.cors_allow_origins : '',
+                cors_allow_methods: ac.cors_allow_methods != null ? ac.cors_allow_methods : '',
+                cors_allow_headers: ac.cors_allow_headers != null ? ac.cors_allow_headers : '',
+                cors_max_age: ac.cors_max_age != null ? ac.cors_max_age : 0,
               };
             } catch (e) {
               console.error('解析access_json失败', e);
@@ -1396,30 +1825,33 @@
       'formData.ssl': {
         handler(newVal, oldVal) {
           // 只在非编辑模式下且SSL状态确实发生变化时才自动设置端口
+          // 新增模式下切换 SSL 时按老 UX 联动端口行：开SSL默认 443:https + 80:http，关SSL退回 80:http
           if (!this.isEdit && oldVal !== undefined && newVal !== oldVal) {
+            this.formData.ssl_config_mode = 'existing';
+            const main = this.portRows[0];
             if (newVal === "1") {
-              // 选择SSL：重置SSL配置模式为已有证书
-              this.formData.ssl_config_mode = 'existing';
-              // 只有当端口为空或为默认的80时才设置为443
-              if (!this.formData.port || this.formData.port === 80) {
-                this.formData.port = 443;
+              if (main && (!main.port || main.port === 80)) {
+                main.port = 443;
               }
-              // 只有当bind_more_port为空时才设置为80
-              if (!this.formData.bind_more_port || this.formData.bind_more_port === '') {
-                this.formData.bind_more_port = '80';
+              // 主端口协议随 SSL 开关联动（复刻老版本"开 SSL 即整站 https"，非 80/443 主端口也生效）
+              if (main) {
+                main.proto = 'https';
               }
+              // 默认补一行 80:HTTP 供证书文件验证(http01)用；用户取消过勾选就不再自动补
+              this.syncAcmePort80();
             } else if (newVal === "0") {
-              // 取消SSL：清除SSL配置模式
-              this.formData.ssl_config_mode = 'existing';
-              // 只有当端口为443时才设置为80
-              if (this.formData.port === 443) {
-                this.formData.port = 80;
+              if (main && main.port === 443) {
+                main.port = 80;
               }
-              // 只有当bind_more_port为'80'时才清空
-              if (this.formData.bind_more_port === '80') {
-                this.formData.bind_more_port = '';
+              if (main) {
+                main.proto = 'http';
+              }
+              const idx80 = this.portRows.findIndex((r, i) => i > 0 && Number(r.port) === 80 && r.proto === 'http');
+              if (idx80 > 0) {
+                this.portRows.splice(idx80, 1);
               }
             }
+            this.onPortRowsChanged();
           }
         }
       },
@@ -1440,7 +1872,150 @@
         this.loadCdnProviderInfo(this.formData.cdn_provider);
       }
     },
+    beforeDestroy() {
+      this.cancelHealthTest();
+      clearTimeout(this.diagnosticScrollTimer);
+    },
     methods: {
+      scrollToDiagnosticSection() {
+        clearTimeout(this.diagnosticScrollTimer);
+        if (!this.dialogVisible || !['listen', 'backend', 'tls'].includes(this.initSection)) return;
+        this.$nextTick(() => {
+          this.diagnosticScrollTimer = setTimeout(() => {
+            if (!this.dialogVisible) return;
+            const target = this.$el.querySelector(`[data-diagnostic-section="${this.initSection}"]`);
+            if (target) target.scrollIntoView({ block: 'center', behavior: 'auto' });
+          }, 250);
+        });
+      },
+      cancelHealthTest() {
+        this.healthTestGeneration += 1;
+        if (this.healthTestController) this.healthTestController.abort();
+        this.healthTestController = null;
+        this.healthTestLoading = false;
+      },
+      resetHealthTest() {
+        this.cancelHealthTest();
+        this.healthTestResults = [];
+        this.healthTestTotal = 0;
+        this.healthTestStale = false;
+        this.healthTestError = '';
+        this.healthTestExpectedCodes = '';
+        this.healthTestSnapshot = '';
+      },
+      async testHealth(config) {
+        if (this.healthTestLoading || !this.dialogVisible) return;
+        this.resetHealthTest();
+        const initialGeneration = this.healthTestGeneration;
+        this.healthyConfigData = JSON.parse(JSON.stringify(config));
+        await this.$nextTick();
+        if (initialGeneration !== this.healthTestGeneration || this.healthTestLoading || !this.dialogVisible) return;
+        const healthy = {
+          is_enable_healthy: parseInt(config.is_enable_healthy, 10),
+          fail_count: parseInt(config.fail_count, 10),
+          success_count: parseInt(config.success_count, 10),
+          response_time: parseInt(config.response_time, 10),
+          check_method: config.check_method,
+          check_path: config.check_path,
+          expected_codes: config.expected_codes
+        };
+        const integerInRange = (value, min, max) => /^\d+$/.test(String(value))
+          && Number.isInteger(Number(value)) && Number(value) >= min && Number(value) <= max;
+        if (!integerInRange(config.is_enable_healthy, 0, 1)
+          || !integerInRange(config.fail_count, 1, 10) || !integerInRange(config.success_count, 1, 10)
+          || !integerInRange(config.response_time, 1, 120) || !['GET', 'HEAD'].includes(healthy.check_method)) {
+          this.healthTestError = String(this.$t('page.host.health_check.test_invalid_config'));
+          return;
+        }
+        const origin = this.formData;
+        const loadBalance = String(origin.is_enable_load_balance) === '1';
+        if (loadBalance && !origin.code) {
+          this.healthTestError = String(this.$t('page.host.health_check.test_save_loadbalance'));
+          return;
+        }
+        if (!origin.host || !/^https?:\/\/[^\s]+$/.test(origin.remote_host || '')
+          || (!loadBalance && !integerInRange(origin.remote_port, 1, 65535))) {
+          this.healthTestError = String(this.$t('page.host.health_check.test_invalid_origin'));
+          return;
+        }
+        const payload = {
+          code: origin.code || '', host: origin.host, remote_host: origin.remote_host,
+          remote_ip: origin.remote_ip || '', remote_port: parseInt(origin.remote_port, 10) || 0,
+          is_enable_load_balance: parseInt(origin.is_enable_load_balance, 10),
+          is_trans_back_domain: parseInt(origin.is_trans_back_domain, 10),
+          healthy_json: JSON.stringify(healthy), limit: 5
+        };
+        this.resetHealthTest();
+        const generation = this.healthTestGeneration;
+        const snapshot = this.healthTestConfigKey;
+        this.healthTestSnapshot = snapshot;
+        this.healthTestExpectedCodes = healthy.expected_codes;
+        this.healthTestLoading = true;
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        this.healthTestController = controller;
+        const isCurrent = () => generation === this.healthTestGeneration && this.dialogVisible
+          && snapshot === this.healthTestConfigKey;
+        try {
+          let offset = 0;
+          while (isCurrent()) {
+            const response: any = await testHostHealth({ ...payload, offset },
+              healthy.response_time * 1000 + 10000, controller ? controller.signal : undefined);
+            if (!isCurrent()) return;
+            if (response.code !== 0) {
+              this.healthTestError = response.msg || String(this.$t('page.host.health_check.test_request_failed'));
+              return;
+            }
+            const batch = response.data;
+            if (!batch || !Array.isArray(batch.results) || !Number.isInteger(batch.total) || batch.total < 0
+              || !Number.isInteger(batch.next_offset) || batch.results.length > 5
+              || batch.results.some(row => !row || !['passed', 'failed', 'skipped'].includes(row.outcome))) {
+              throw new Error(String(this.$t('page.host.health_check.test_invalid_response')));
+            }
+            this.healthTestResults = this.healthTestResults.concat(batch.results);
+            this.healthTestTotal = batch.total;
+            if (batch.next_offset === -1) break;
+            if (!batch.results.length || batch.next_offset !== offset + batch.results.length
+              || batch.next_offset >= batch.total) {
+              throw new Error(String(this.$t('page.host.health_check.test_invalid_response')));
+            }
+            offset = batch.next_offset;
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            this.healthTestError = error.message || String(this.$t('page.host.health_check.test_request_failed'));
+          }
+        } finally {
+          if (isCurrent()) {
+            this.healthTestLoading = false;
+            this.healthTestController = null;
+          }
+        }
+      },
+      openGroupQuickAdd() {
+        this.groupQuickAdd = { group_name: '', color: this.groupColorOptions[0] };
+        this.groupQuickAddVisible = true;
+      },
+      saveGroupQuickAdd() {
+        const name = (this.groupQuickAdd.group_name || '').trim();
+        if (!name) {
+          this.$message.warning(this.$t('page.host.group.name_required'));
+          return;
+        }
+        addHostGroup({ group_name: name, color: this.groupQuickAdd.color, remarks: '' }).then((res) => {
+          if (res.code === 0) {
+            this.groupQuickAddVisible = false;
+            // 让父页面重新拉一次分组（左栏与本下拉共用同一份数据），再回填到当前表单
+            this.$emit('group-changed');
+            if (res.data && res.data.group_code) {
+              this.formData.group_code = res.data.group_code;
+            }
+          } else {
+            this.$message.error(res.msg || this.$t('common.failed'));
+          }
+        }).catch((e) => {
+          console.log(e);
+        });
+      },
       // CDN 厂商选择变化：加载中心库状态(只读展示)
       onCdnProviderChange(v) {
         this.cdnProviderInfo = null;
@@ -1491,6 +2066,12 @@
         this.tabPlacement = this.tabPlacement === 'left' ? 'top' : 'left';
         localStorage.setItem('samwaf_host_tab_placement', this.tabPlacement);
         this.$emit('tab-placement-change', this.tabPlacement);
+      },
+      // 全屏：弹窗本体宽高由父级控制，这里只持久化偏好并通知
+      toggleFullscreen() {
+        this.isFullscreen = !this.isFullscreen;
+        localStorage.setItem('samwaf_host_form_fullscreen', this.isFullscreen ? '1' : '0');
+        this.$emit('fullscreen-change', this.isFullscreen);
       },
       // 引擎自带防护表格：按 row.src 读开关值（defense_json 各项 或 各子配置的 is_enable）
       getDefenseValue(row) {
@@ -1572,7 +2153,9 @@
           .then((res) => {
             let resdata = res;
             if (resdata.code === 0) {
-              this.sslConfigList = resdata.data.list;
+              // 证书夹为空时后端返回 list:null，直接赋值会让 certSummary/sslOptions 在渲染中抛错，
+              // 整个弹窗从此不再更新（表现为点哪都没反应）
+              this.sslConfigList = resdata.data.list || [];
             }
           })
           .catch((e: Error) => {
@@ -1582,6 +2165,15 @@
             this.dataLoading = false;
           });
         this.dataLoading = true;
+      },
+      // 拉取IP组下拉选项（网站密码访问的免密IP组用）。
+      // 失败静默：接口不可用不应影响弹窗里其它配置的编辑
+      getIpGroupOptions() {
+        wafIPGroupOptionsApi().then((res) => {
+          if (res.code === 0) {
+            this.ipGroupOptions = res.data ?? [];
+          }
+        }).catch(() => {});
       },
       // 处理SSL选择变更
       handleSslChange(value) {
@@ -1675,6 +2267,123 @@
         this.formData.http_auth_path_prefix = `/_waf_${randomStr}`;
         this.$message.success(this.$t('page.host.generate_path_success'));
       },
+        // ── 端口监听行（issue #955）───────────────────────────
+        // 初始化：优先用后端派生的 resolved_listens（当前真实生效值，含空表派生），
+        // 缺失时按老规则在前端复刻派生。implied（AutoJumpHTTPS 隐式 80）不进编辑器，由后端自动管理。
+        initPortRows(src) {
+          let rows = [];
+          const resolved = src && src.resolved_listens;
+          if (Array.isArray(resolved) && resolved.length > 0) {
+            rows = resolved.filter(l => !l.implied).map(l => ({
+              port: l.port, proto: l.proto === 'https' ? 'https' : 'http', ipv: l.ipv || 'both'
+            }));
+          } else {
+            const ssl = String(src && src.ssl != null ? src.ssl : '0') === '1';
+            const mainPort = Number((src && src.port) || 80);
+            rows.push({ port: mainPort, proto: ssl ? 'https' : 'http', ipv: 'both' });
+            String((src && src.bind_more_port) || '').split(',').forEach(p => {
+              const port = parseInt(String(p).trim(), 10);
+              if (!port || rows.some(r => Number(r.port) === port)) return;
+              rows.push({ port, proto: (port === 443 || (ssl && port !== 80)) ? 'https' : 'http', ipv: 'both' });
+            });
+          }
+          this.portRows = rows;
+          this.portRowsDirty = false;
+          this.portCheckMsg = '';
+          // 已经指定过 IP 版本的站点，打开就把这一列展开，否则用户看不到自己配过什么
+          this.showPortIpv = rows.some(r => r.ipv && r.ipv !== 'both');
+          this.acme80OptOut = false;
+        },
+        // 出现 HTTPS 端口且用户没取消过勾选时，补一行 80:HTTP（默认勾上的实际动作）。
+        // 主端口本身是 80 的场景由 showAcmePort80 排除，不会在这里补出重复端口。
+        syncAcmePort80() {
+          if (this.acme80OptOut || !this.showAcmePort80) return;
+          if (this.portRows.some(r => Number(r.port) === 80)) return;
+          this.portRows.push({ port: 80, proto: 'http', ipv: 'both' });
+        },
+        // 「添加 80 端口（证书文件验证用）」：勾上补一行 80:HTTP，取消则移除该行
+        onAcmePort80Change(val) {
+          this.acme80OptOut = !val;
+          if (val) {
+            if (!this.portRows.some(r => Number(r.port) === 80)) {
+              this.portRows.push({ port: 80, proto: 'http', ipv: 'both' });
+              this.onPortRowsChanged();
+            }
+            return;
+          }
+          const idx80 = this.portRows.findIndex((r, i) => i > 0 && Number(r.port) === 80 && r.proto === 'http');
+          if (idx80 > 0) {
+            this.portRows.splice(idx80, 1);
+            this.onPortRowsChanged();
+          }
+        },
+        // 取消勾选时把所有行重置回 both：隐藏一个仍在生效的非默认值比多点一次更危险
+        onShowPortIpvChange(val) {
+          this.showPortIpv = val;
+          if (!val && this.portRows.some(r => r.ipv !== 'both')) {
+            this.portRows.forEach(r => this.$set(r, 'ipv', 'both'));
+            this.onPortRowsChanged();
+          }
+        },
+        // 协议切换：t-radio-group 用 :value + @change 受控（v-model 在 v-for 里配 options 渲染不稳）
+        onProtoChange(row, val) {
+          this.$set(row, 'proto', val);
+          // 手工把某个端口切成 HTTPS 时也要立刻补 80，否则勾选框显示"未勾选"、
+          // 但稍后打开 SSL 开关又会补上，用户看到的与最终保存的对不上
+          this.syncAcmePort80();
+          this.onPortRowsChanged();
+        },
+        addPortRow() {
+          if (this.portRows.length >= 32) {
+            this.$message.warning(this.$t('page.host.port_listen.too_many'));
+            return;
+          }
+          this.portRows.push({ port: undefined, proto: 'http', ipv: 'both' });
+          this.onPortRowsChanged();
+        },
+        removePortRow(idx) {
+          this.portRows.splice(idx, 1);
+          this.onPortRowsChanged();
+        },
+        // 任何端口行变化：标脏 + 双写 port/bind_more_port + 防抖调预检接口
+        onPortRowsChanged() {
+          this.portRowsDirty = true;
+          if (this.portRows.length > 0 && this.portRows[0].port) {
+            this.formData.port = Number(this.portRows[0].port);
+          }
+          this.formData.bind_more_port = this.portRows.slice(1)
+            .filter(r => r.port).map(r => String(r.port)).join(',');
+          if (this.portCheckTimer) clearTimeout(this.portCheckTimer);
+          this.portCheckTimer = setTimeout(this.runPortCheck, 500);
+        },
+        buildPortListensJson() {
+          return JSON.stringify(this.portRows.filter(r => r.port).map(r => ({
+            port: Number(r.port), proto: r.proto, ipv: r.ipv || 'both'
+          })));
+        },
+        runPortCheck() {
+          this.portCheckMsg = '';
+          const rows = this.portRows.filter(r => r.port);
+          if (rows.length === 0) return;
+          checkHostPorts({
+            code: this.formData.code || '',
+            port: Number(rows[0].port),
+            ssl: Number(this.formData.ssl),
+            auto_jump_https: Number(this.formData.auto_jump_https || 0),
+            port_listens_json: this.buildPortListensJson(),
+          }).then((res) => {
+            // 响应拦截器返回整个报文 {code,msg,data}：冲突文案在 data.message，
+            // 校验不通过时后端走 FailWithMessage(code!=0)，不会 reject，必须在这里分支
+            if (!res) return;
+            if (res.code === 0) {
+              this.portCheckMsg = (res.data && res.data.message) ? res.data.message : '';
+            } else {
+              this.portCheckMsg = res.msg || '';
+            }
+          }).catch((e) => {
+            this.portCheckMsg = (e && e.message) ? e.message : String(e);
+          });
+        },
         // 表单提交
         onSubmit({ validateResult, firstError }) {
           console.log(validateResult, firstError);
@@ -1721,6 +2430,42 @@
               postdata['certfile'] = '';
               postdata['keyfile'] = '';
             }
+
+            // ── 端口监听表（issue #955）──
+            // 只有新增或用户动过端口区才校验并重写端口三字段；编辑未动一律原样保留
+            // （port/bind_more_port 也不"归一化"改写——避免升级前的存量值被无声变动）
+            if (!this.isEdit || this.portRowsDirty) {
+              // 主端口(第一行)不允许为空：清空后提交会把第一个副端口静默提升为主端口
+              if (!this.portRows.length || !this.portRows[0].port) {
+                this.$message.warning(this.$t('page.host.port_listen.main_required'));
+                return;
+              }
+              const portRows = this.portRows.filter(r => r.port);
+              if (portRows.length > 32) {
+                this.$message.warning(this.$t('page.host.port_listen.too_many'));
+                return;
+              }
+              const seenPorts = {};
+              for (const r of portRows) {
+                const p = Number(r.port);
+                if (seenPorts[p]) {
+                  this.$message.warning(this.$t('page.host.port_listen.dup_port') + ': ' + p);
+                  return;
+                }
+                seenPorts[p] = true;
+              }
+              if (portRows.some(r => r.proto === 'https') && postdata['ssl'] !== 1) {
+                this.$message.warning(this.$t('page.host.port_listen.https_need_ssl'));
+                return;
+              }
+              // 主端口=第一行；副端口双写回 bind_more_port（老路径与老版本回滚兼容）
+              postdata.port = Number(portRows[0].port);
+              postdata.bind_more_port = portRows.slice(1).map(r => String(r.port)).join(',');
+              postdata.port_listens_json = this.buildPortListensJson();
+            } else {
+              delete postdata.port_listens_json;
+            }
+            delete postdata.resolved_listens;
             // 处理防御配置
             let defenseData = {
               bot: parseInt(this.hostDefenseData.bot),
@@ -1748,6 +2493,8 @@
             postdata['healthy_json'] = JSON.stringify(healthyData);
 
             // 处理验证码配置
+            // ⚠️ 这是一张白名单：验证码配置新增字段必须同时加进来，
+            // 漏了的话界面上填得进去、保存也不报错，但值根本没进后端——静默丢弃。
             let captchaData = {
               is_enable_captcha: parseInt(this.captchaConfigData.is_enable_captcha),
               path_prefix: this.captchaConfigData.path_prefix || '',
@@ -1755,6 +2502,7 @@
               expire_time: this.captchaConfigData.expire_time,
               ip_mode: this.captchaConfigData.ip_mode,
               engine_type: this.captchaConfigData.engine_type,
+              contact_info: this.captchaConfigData.contact_info || '',
               cap_js_config: this.captchaConfigData.cap_js_config 
             };
             postdata['captcha_json'] = JSON.stringify(captchaData);
@@ -1778,6 +2526,43 @@
               max_memory_size_mb: parseFloat(this.cacheConfigData.max_memory_size_mb)
             };
             postdata['cache_json'] = JSON.stringify(cacheData);
+
+            // 处理网站密码访问的时效配置
+            // ⚠️ 同样是一张白名单：新增字段必须同时加进来，漏了就是静默丢弃。
+            // session_ttl 兜底 1440 而不是 0：0 会让后端按「非法值」回落，虽然结果一样，
+            // 但页面上留个 0 让人以为设成了「永不过期」，实际是 24 小时。
+            // 范围类字段同理兜底：非法值回落 all，交给后端按整站处理。
+            let httpAuthPathScope = this.httpAuthConfigData.path_scope;
+            if (httpAuthPathScope !== 'include' && httpAuthPathScope !== 'exclude') {
+              httpAuthPathScope = 'all';
+            }
+            // 选了按路径开启却没填路径：拦在保存前。后端虽然会按整站 fail-closed，
+            // 但那和用户在页面上看到的意图不一致，静默改语义不如明说
+            if (httpAuthPathScope !== 'all' && !(this.httpAuthConfigData.paths || '').trim()) {
+              this.$message.warning(this.$t('page.host.http_auth_paths_required'));
+              return;
+            }
+            // 上限与后端 BuildPathPatterns 的截断一致（50 条、每条 256 字符），
+            // 超限提示而不是静默截断，避免用户以为配了实际没生效
+            let httpAuthPathLines = (this.httpAuthConfigData.paths || '')
+              .split(/[\n,]/).map(s => s.trim()).filter(s => s !== '');
+            if (httpAuthPathLines.length > 50) {
+              this.$message.warning(this.$t('page.host.http_auth_paths_too_many'));
+              return;
+            }
+            if (httpAuthPathLines.some(s => s.length > 256)) {
+              this.$message.warning(this.$t('page.host.http_auth_paths_too_long'));
+              return;
+            }
+            let httpAuthData = {
+              session_ttl: parseInt(this.httpAuthConfigData.session_ttl, 10) || 1440,
+              idle_timeout: parseInt(this.httpAuthConfigData.idle_timeout, 10) || 0,
+              bind_ip: parseInt(this.httpAuthConfigData.bind_ip, 10) || 0,
+              path_scope: httpAuthPathScope,
+              paths: this.httpAuthConfigData.paths || '',
+              bypass_ip_group: this.httpAuthConfigData.bypass_ip_group || ''
+            };
+            postdata['http_auth_json'] = JSON.stringify(httpAuthData);
 
             const rcData = {
               is_enable: parseInt(this.responseCompressConfigData.is_enable, 10) || 0,
@@ -1818,6 +2603,12 @@
               require_otp: parseInt(this.accessConfigData.require_otp, 10) || 0,
               unauth_action: this.accessConfigData.unauth_action || '',
               allow_ip_group_code: this.accessConfigData.allow_ip_group_code || '',
+              // 新增字段务必同步加在这里：本对象是白名单式序列化，
+              // 漏一个就等于每次保存站点都把它悄悄清掉
+              cors_allow_origins: this.accessConfigData.cors_allow_origins || '',
+              cors_allow_methods: this.accessConfigData.cors_allow_methods || '',
+              cors_allow_headers: this.accessConfigData.cors_allow_headers || '',
+              cors_max_age: parseInt(this.accessConfigData.cors_max_age, 10) || 0,
             });
 
             // 处理网页防篡改配置
@@ -1926,6 +2717,13 @@
 .host-tabs-wrapper--left >>> .t-tabs__content:hover {
   scrollbar-color: rgba(0, 0, 0, 0.25) transparent;
 }
+/* 全屏时弹窗 body(96vh-92px) 与 Tab 内容(65vh) 是两个高度不同的滚动容器，
+   滚到内层尽头会接力滚外层，视觉上就是画面上下抖动。全屏下把 Tab 撑到与 body 同高，
+   让 body 不再产生溢出，全局只留一个滚动容器。 */
+.host-tabs-wrapper--left.host-tabs-wrapper--fullscreen >>> .t-tabs__header,
+.host-tabs-wrapper--left.host-tabs-wrapper--fullscreen >>> .t-tabs__content {
+  max-height: calc(96vh - 200px);
+}
 .host-tabs-wrapper--left >>> .t-tabs__header::-webkit-scrollbar,
 .host-tabs-wrapper--left >>> .t-tabs__content::-webkit-scrollbar {
   width: 6px;
@@ -1960,10 +2758,170 @@
   margin-top: 8px;
   max-width: 620px;
 }
+.backend-host-help-text {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.backend-host-help-text p {
+  margin: 0 0 4px;
+}
 .host-form-ip-mode-help-icon {
   margin-left: 6px;
   vertical-align: middle;
   cursor: help;
   color: var(--td-text-color-secondary, rgba(0, 0, 0, 0.55));
+}
+.hg-form-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+.hg-form-new {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--td-brand-color, #0052d9);
+  cursor: pointer;
+}
+.hg-form-colors {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  height: 32px;
+}
+.hg-form-colors i {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  display: inline-block;
+}
+.hg-form-colors i.on {
+  border-color: var(--td-text-color-primary, rgba(0, 0, 0, 0.9));
+}
+.hg-form-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--td-text-color-placeholder, rgba(0, 0, 0, 0.35));
+}
+.port-listen-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 100%;
+}
+.port-listen-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  max-width: 100%;
+}
+/* 行内每个控件都必须 flex:none：否则 radio-group 被压缩到放不下两个选项，
+   看上去就成了"只有一个按钮、切换没反应" */
+.port-listen-row > * {
+  flex: none;
+}
+/* 表头：列名替代原先压在下方的长段说明，宽度必须与下面数据行逐列对齐 */
+.port-listen-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--td-text-color-placeholder, rgba(0, 0, 0, 0.35));
+  margin-bottom: 2px;
+}
+.port-listen-head > * {
+  flex: none;
+}
+.port-listen-mainflag {
+  width: 28px;
+  display: inline-flex;
+}
+/* 标签收到 130px 后内容区约 590px，整行(端口+协议+IP版本+删除)合计约 470px 仍留有余量；
+   若以后再加列，仍要以"内容区宽度"为上限校核，否则最右的删除按钮会被挤出可视区 */
+.port-listen-num {
+  width: 116px;
+}
+.port-listen-ipv {
+  width: 130px;
+}
+/* 「添加端口」与两个勾选项同一行 */
+.port-listen-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 2px;
+}
+.port-listen-acme80 {
+  display: inline-flex;
+  align-items: center;
+}
+/* 协议列定宽并让两个分段按钮均分，表头列名才能和它对齐 */
+.port-listen-proto {
+  width: 136px;
+  display: flex;
+}
+.port-listen-proto ::v-deep .t-radio-button {
+  flex: 1;
+  justify-content: center;
+  padding: 0;
+}
+.port-listen-hint {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--td-text-color-placeholder, rgba(0, 0, 0, 0.35));
+}
+.port-listen-hint-err {
+  color: var(--td-error-color, #d54941);
+}
+.port-listen-hint-warn {
+  color: var(--td-warning-color, #e37318);
+}
+/* ===== 「基础内容」分节 ===== */
+.hf-sect {
+  margin-bottom: 18px;
+}
+.hf-sect-last {
+  margin-bottom: 0;
+}
+.hf-sect-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 14px;
+  padding-bottom: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--td-text-color-secondary, rgba(0, 0, 0, 0.6));
+  border-bottom: 1px solid var(--td-component-stroke, #e7e7e7);
+}
+.hf-sect-title::before {
+  content: '';
+  flex: none;
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--td-brand-color, #0052d9);
+}
+.hf-sect-title small {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--td-text-color-placeholder, rgba(0, 0, 0, 0.35));
+}
+.hf-sect-title .hf-sect-extra {
+  margin-left: auto;
+  font-weight: 400;
+}
+/* 后端IP + 后端端口 并排：两者仍是各自独立的 form-item，校验红字才能各归各位 */
+.hf-inline-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
 }
 </style>

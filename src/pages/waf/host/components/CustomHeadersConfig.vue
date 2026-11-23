@@ -1,13 +1,25 @@
 <template>
   <div class="custom-headers-config">
-    <t-form-item :label="$t('page.host.custom_headers.is_enable')">
-      <t-tooltip class="placement top center" :content="$t('page.host.custom_headers.is_enable_tips')" placement="top"
-                 :overlay-style="{ width: '300px' }" show-arrow>
-        <t-radio-group v-model="localConfig.is_enable_custom_headers" @change="updateParent">
-          <t-radio value="0">{{ $t('common.off') }}</t-radio>
-          <t-radio value="1">{{ $t('common.on') }}</t-radio>
-        </t-radio-group>
-      </t-tooltip>
+    <t-form-item>
+      <template #label>
+        <span>{{ $t('page.host.custom_headers.is_enable') }}</span>
+        <t-tooltip trigger="click" placement="top" :overlay-style="{ maxWidth: 'min(460px, calc(100vw - 32px))' }" show-arrow>
+          <template #content>
+            <div class="forwarded-host-help">
+              <p>{{ $t('page.host.custom_headers.is_enable_tips') }}</p>
+              <p>{{ $t('page.host.custom_headers.forwarded_host_guide') }}</p>
+              <p>{{ $t('page.host.custom_headers.forwarded_host_relation') }}</p>
+            </div>
+          </template>
+          <t-button variant="text" size="small" shape="square" :aria-label="$t('page.host.custom_headers.show_help')">
+            <t-icon name="help-circle" />
+          </t-button>
+        </t-tooltip>
+      </template>
+      <t-radio-group v-model="localConfig.is_enable_custom_headers" @change="updateParent">
+        <t-radio value="0">{{ $t('common.off') }}</t-radio>
+        <t-radio value="1">{{ $t('common.on') }}</t-radio>
+      </t-radio-group>
     </t-form-item>
 
     <!-- 使用说明 -->
@@ -43,6 +55,7 @@
               <li>{{ $t('page.host.custom_headers.example_2') }}</li>
               <li>{{ $t('page.host.custom_headers.example_3') }}</li>
               <li>{{ $t('page.host.custom_headers.example_4') }}</li>
+              <li>{{ $t('page.host.custom_headers.example_5') }}</li>
             </ul>
           </div>
 
@@ -103,7 +116,7 @@
                     :placeholder="$t('page.host.custom_headers.header_value_placeholder')"
                     style="width: 320px;">
                     <template #suffix>
-                      <t-dropdown :options="variableOptions" @click="(data) => insertVariable(index, data.value)">
+                      <t-dropdown :options="isOriginHost(header.header_name) ? originHostOptions : variableOptions" @click="(data) => insertVariable(index, data.value)">
                         <t-button size="small" variant="text" style="padding: 0 4px;">
                           <t-icon name="add-circle" style="margin-right: 4px;" />
                           {{ $t('page.host.custom_headers.insert_variable') }}
@@ -124,9 +137,12 @@
                 {{ $t('common.delete') }}
               </t-button>
             </div>
+            <p v-if="isOriginHost(header.header_name)" class="origin-host-help">
+              {{ $t('page.host.custom_headers.origin_host_help') }}
+            </p>
           </div>
         </div>
-        
+
         <!-- 添加按钮 -->
         <div class="add-button-container">
           <t-button 
@@ -136,6 +152,9 @@
             @click="addHeader">
             <t-icon name="add" style="margin-right: 4px;" />
             {{ $t('page.host.custom_headers.add_header') }}
+          </t-button>
+          <t-button v-if="!hasOriginHost" size="small" variant="outline" @click="addOriginHost">
+            {{ $t('page.host.custom_headers.origin_host_add') }}
           </t-button>
         </div>
       </div>
@@ -199,7 +218,27 @@ export default {
         immediate: true
       }
     },
+    computed: {
+      hasOriginHost() {
+        return this.localConfig.headers.some((header) => this.isOriginHost(header.header_name));
+      },
+      originHostOptions() {
+        return [
+          { content: '${hostname} · ' + this.$t('page.host.custom_headers.origin_host_no_port'), value: '${hostname}' },
+          { content: '${host} · ' + this.$t('page.host.custom_headers.origin_host_keep_port'), value: '${host}' },
+        ];
+      },
+    },
     methods: {
+      isOriginHost(name) {
+        return /^host$/i.test(name);
+      },
+      addOriginHost() {
+        if (!this.hasOriginHost) {
+          this.localConfig.headers.push({ header_name: 'Host', header_value: '${hostname}' });
+          this.updateParent();
+        }
+      },
       updateParent() {
         console.log("CustomHeadersConfig 更新父组件:", this.localConfig);
         this.$emit('update', JSON.parse(JSON.stringify(this.localConfig)));
@@ -225,8 +264,7 @@ export default {
     insertVariable(headerIndex, variable) {
       const header = this.localConfig.headers[headerIndex];
       if (header) {
-        // 在光标位置插入变量，如果没有光标位置就追加到末尾
-        header.header_value = (header.header_value || '') + variable;
+        header.header_value = this.isOriginHost(header.header_name) ? variable : (header.header_value || '') + variable;
         this.updateParent();
       }
     },
@@ -271,6 +309,18 @@ export default {
 </script>
 
 <style lang="less" scoped>
+.forwarded-host-help {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+
+  p {
+    margin: 0;
+
+    + p {
+      margin-top: 8px;
+    }
+  }
+}
 .custom-headers-config {
   .variable-help {
     padding: 16px;
@@ -406,7 +456,16 @@ export default {
       }
     }
     
+    .origin-host-help {
+      margin: 8px 0 0;
+      font-size: 12px;
+      color: var(--td-text-color-secondary);
+    }
+
     .add-button-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
       margin-top: 12px;
       padding-top: 12px;
       border-top: 1px dashed var(--td-border-level-2-color);

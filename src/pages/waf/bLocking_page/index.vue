@@ -4,6 +4,8 @@
       <t-row justify="space-between">
         <div class="left-operation-container">
           <t-button @click="handleAdd"> {{ $t('page.blocking_page.button_add_blocking_page') }} </t-button>
+          <t-button variant="outline" @click="openGlobalResponseDialog('not_match_website')">{{ $t('page.blocking_page.unmatched.title') }}</t-button>
+          <t-button variant="outline" @click="openGlobalResponseDialog('backend_unavailable')">{{ $t('page.blocking_page.backend_unavailable.title') }}</t-button>
         </div>
         <div class="right-operation-container">
             <t-form ref="form" :data="searchformData" :label-width="300" layout="inline" colon :style="{ marginBottom: '8px' }">
@@ -23,10 +25,16 @@
           :headerAffixedTop="true" :headerAffixProps="{ offsetTop: offsetTop, container: getContainer }">
 
           <template #host_code="{ row }">
-            <span> {{host_dic[row.host_code]}}</span>
+            <span>{{ row.host_code === globalHostCode ? $t('page.blocking_page.global_website') : host_dic[row.host_code] }}</span>
+          </template>
+          <template #blocking_type="{ row }">
+            <span>{{ getBlockingTypeLabel(row.blocking_type) }}</span>
           </template>
           <template #attack_type="{ row }">
             <span>{{ getAttackTypeLabel(row.attack_type) }}</span>
+          </template>
+          <template #response_code="{ row }">
+            <span>{{ row.blocking_type === 'backend_unavailable' ? $t('page.blocking_page.backend_unavailable.response_code') : row.response_code }}</span>
           </template>
           <template #content_priority="{ row }">
             <span>{{ getContentPriorityLabel(row.content_priority) }}</span>
@@ -103,6 +111,7 @@
                           <t-radio-button value="code">{{ $t('page.blocking_page.editor_mode.code') }}</t-radio-button>
                           <t-radio-button value="preview">{{ $t('page.blocking_page.editor_mode.preview') }}</t-radio-button>
                         </t-radio-group>
+                        <div class="priority-tip">{{ $t('page.blocking_page.template_variables') }}</div>
                         <t-textarea
                           v-show="previewModeAdd === 'code'"
                           v-model="formData.response_content"
@@ -193,6 +202,7 @@
                               <t-radio-button value="code">{{ $t('page.blocking_page.editor_mode.code') }}</t-radio-button>
                               <t-radio-button value="preview">{{ $t('page.blocking_page.editor_mode.preview') }}</t-radio-button>
                             </t-radio-group>
+                            <div class="priority-tip">{{ $t('page.blocking_page.template_variables') }}</div>
                             <t-textarea
                               v-show="previewModeEdit === 'code'"
                               v-model="formEditData.response_content"
@@ -230,6 +240,37 @@
       </div>
     </t-dialog>
 
+    <t-dialog :header="$t(`${globalResponseConfig.i18n}.title`)" :visible.sync="globalResponseVisible" :width="780" :footer="false"
+      :closeOnOverlayClick="!globalResponseSaving" :closeOnEscKeydown="!globalResponseSaving" :closeBtn="!globalResponseSaving">
+      <div slot="body">
+        <p>{{ $t(`${globalResponseConfig.i18n}.description`) }}</p>
+        <div style="width: 100%;">
+          <t-radio-group v-model="globalResponseTab" variant="default-filled" size="small" style="margin-bottom: 8px;">
+            <t-radio-button value="edit">{{ $t('page.blocking_page.editor_mode.code') }}</t-radio-button>
+            <t-radio-button value="preview">{{ $t('page.blocking_page.editor_mode.preview') }}</t-radio-button>
+          </t-radio-group>
+          <div class="priority-tip">{{ $t(`${globalResponseConfig.i18n}.builtin_tip`) }}</div>
+          <div class="priority-tip">{{ $t(`${globalResponseConfig.i18n}.variable_tip`) }}</div>
+          <p v-if="globalResponseLoadError" role="alert">{{ $t('page.blocking_page.global_response.load_failed') }}</p>
+          <p v-else-if="builtinLoadError" class="priority-tip" role="alert">{{ $t(globalResponseType === 'backend_unavailable' ? 'page.blocking_page.backend_unavailable.builtin_failed' : 'page.blocking_page.global_response.preview_builtin_failed') }}</p>
+          <t-textarea v-show="globalResponseTab === 'edit'"
+            v-model="globalResponseData.response_content" :disabled="globalResponseLoading || globalResponseLoadError || globalResponseSaving"
+            :placeholder="$t('page.blocking_page.global_response.placeholder')" :autosize="{ minRows: 12, maxRows: 20 }"
+            @input="globalResponseEdited = true" />
+          <!-- sandbox 置空：预览框内不允许执行脚本、不同源，避免模板里的 JS 在管理端被执行 -->
+          <iframe v-show="globalResponseTab === 'preview'" class="global-response-preview-frame" sandbox=""
+            :srcdoc="globalResponsePreviewHtml"></iframe>
+        </div>
+        <div class="global-response-actions">
+          <t-button variant="outline" :disabled="globalResponseLoading || globalResponseLoadError || globalResponseSaving || !builtinResponseHtml"
+            @click="globalResponseData.response_content = builtinResponseHtml">{{ $t('page.blocking_page.global_response.clear') }}</t-button>
+          <t-button variant="outline" :disabled="globalResponseSaving" @click="globalResponseVisible = false">{{ $t('common.close') }}</t-button>
+          <t-button theme="primary" :loading="globalResponseSaving" :disabled="!canSaveGlobalResponse"
+            @click="saveGlobalResponse">{{ $t('common.confirm') }}</t-button>
+        </div>
+      </div>
+    </t-dialog>
+
     <t-dialog :header="$t('common.confirm_delete')" :body="confirmBody" :visible.sync="confirmVisible" @confirm="onConfirmDelete"
       :onCancel="onCancel">
     </t-dialog>
@@ -237,6 +278,7 @@
 </template>
 <script lang="ts">
   import Vue from 'vue';
+  import { purifyHtml } from '@/utils/purify';
   import {
     SearchIcon
   } from 'tdesign-icons-vue';
@@ -249,7 +291,13 @@
   } from '@/apis/host';
 
   import {
-    wafBlockingPageListApi,wafBlockingPageDelApi,wafBlockingPageEditApi,wafBlockingPageAddApi,wafBlockingPageDetailApi
+    wafBlockingPageListApi,
+    wafBlockingPageDelApi,
+    wafBlockingPageEditApi,
+    wafBlockingPageAddApi,
+    wafBlockingPageDetailApi,
+    wafBlockingPageUnmatchedBuiltinApi,
+    wafBlockingPageBackendUnavailableBuiltinApi,
   } from '@/apis/blocking_page.ts';
 
   const INITIAL_DATA = {
@@ -263,11 +311,35 @@
     content_priority:'samwaf',
 
   };
+  const INITIAL_GLOBAL_RESPONSE_DATA = {
+    ...INITIAL_DATA,
+    id: '',
+    response_header: '[]',
+  };
+  const GLOBAL_RESPONSES = {
+    not_match_website: {
+      i18n: 'page.blocking_page.unmatched',
+      responseCode: '403',
+      loadBuiltin: wafBlockingPageUnmatchedBuiltinApi,
+    },
+    backend_unavailable: {
+      i18n: 'page.blocking_page.backend_unavailable',
+      responseCode: '503',
+      loadBuiltin: wafBlockingPageBackendUnavailableBuiltinApi,
+    },
+  };
+  type GlobalResponseType = keyof typeof GLOBAL_RESPONSES;
+
+  function isGlobalResponseType(type: string): type is GlobalResponseType {
+    return Object.prototype.hasOwnProperty.call(GLOBAL_RESPONSES, type);
+  }
   // 预览时用来替换模板占位符的演示数据（后端模板分隔符是 [[ ]]，变量形如 [[.SAMWAF_REQ_UUID]]）
   const PREVIEW_PLACEHOLDER_VALUES = {
     SAMWAF_REQ_UUID: 'PREVIEW-0000-0000-0000',
+    SAMWAF_IP: '203.0.113.10',
     SAMWAF_BACKEND_STATUS: '403 Forbidden',
     SAMWAF_BACKEND_CODE: '403',
+    SAMWAF_HOST: 'notfound.example.com',
     SAMWAF_BACKEND_BODY: '{"code":403,"message":"forbidden"}',
   };
   export default Vue.extend({
@@ -280,6 +352,18 @@
       return {
         addFormVisible: false,
         editFormVisible: false,
+        globalResponseType: 'not_match_website' as GlobalResponseType,
+        globalResponseVisible: false,
+        globalResponseTab: 'edit',
+        globalResponseLoading: false,
+        globalResponseLoaded: false,
+        globalResponseLoadError: false,
+        globalResponseSaving: false,
+        globalResponseLoadSequence: 0,
+        globalResponseEdited: false,
+        builtinResponseHtml: '',
+        builtinLoadError: false,
+        globalResponseData: { ...INITIAL_GLOBAL_RESPONSE_DATA },
         guardVisible: false,
         confirmVisible: false,
         formData: {
@@ -321,13 +405,12 @@
              },
 
 
-          /*  { title: this.$t('page.blocking_page.blocking_type'),
+            { title: this.$t('page.blocking_page.blocking_type'),
                     width: 200,
                     ellipsis: true,
                     colKey: 'blocking_type',
              },
 
-*/
             { title: this.$t('page.blocking_page.host_code'),
                     width: 200,
                     ellipsis: true,
@@ -384,6 +467,7 @@
         guardStatusIdx :-1,
         //主机字典
         host_dic:{},
+        globalHostCode: '',
         //阻止类型
         blocking_type: [
           {
@@ -452,6 +536,23 @@
       previewHtmlEdit() {
         return this.buildPreviewHtml(this.formEditData.response_content);
       },
+      globalResponseConfig() {
+        return GLOBAL_RESPONSES[this.globalResponseType];
+      },
+      canSaveGlobalResponse() {
+        return this.globalResponseLoaded && !this.globalResponseLoading && !this.globalResponseLoadError && !this.globalResponseSaving
+          && (this.globalResponseType !== 'backend_unavailable' || Boolean(this.builtinResponseHtml));
+      },
+      globalResponsePreviewHtml() {
+        const custom = this.globalResponseData.response_content;
+        const hasCustom = Boolean(custom.trim());
+        const content = hasCustom ? custom : this.builtinResponseHtml;
+        const demo = { SAMWAF_HOST: PREVIEW_PLACEHOLDER_VALUES.SAMWAF_HOST };
+        if (this.globalResponseType === 'backend_unavailable') {
+          return this.buildPreviewHtml(content, { ...demo, SAMWAF_STATUS_CODE: this.globalResponseConfig.responseCode });
+        }
+        return this.buildPreviewHtml(content, hasCustom ? undefined : demo);
+      },
     },
     mounted() {
       this.loadHostList().then(() => {
@@ -460,18 +561,137 @@
     },
 
     methods: {
-      // 把模板占位符替换成演示数据后给预览用；空值一律按默认的 samwaf 处理
-      buildPreviewHtml(content) {
+      async loadGlobalResponseBuiltin(type: GlobalResponseType, sequence: number) {
+        try {
+          const res = await GLOBAL_RESPONSES[type].loadBuiltin();
+          if (sequence !== this.globalResponseLoadSequence || !this.globalResponseVisible) return;
+          if (res.code !== 0 || typeof res.data !== 'string' || !res.data.trim()) {
+            this.builtinLoadError = true;
+            return;
+          }
+          this.builtinResponseHtml = res.data;
+          // 只有未编辑的空白草稿才预填内置页面。
+          if (!this.globalResponseEdited && !this.globalResponseData.response_content.trim()) {
+            this.globalResponseData.response_content = res.data;
+          }
+        } catch (e) {
+          if (sequence === this.globalResponseLoadSequence && this.globalResponseVisible) this.builtinLoadError = true;
+        }
+      },
+      findGlobalHostCode(hosts) {
+        const marked = hosts.filter(host => Number(host.global_host) === 1);
+        const candidates = marked.length ? marked : hosts.filter(host =>
+          host.pre_host === 'global:80' || host.label === 'global:80' || host.label === 'global',
+        );
+        return candidates.length === 1 && typeof candidates[0].value === 'string'
+          ? candidates[0].value : '';
+      },
+      getBlockingTypeLabel(blockingType) {
+        if (isGlobalResponseType(blockingType)) {
+          return this.$t(`${GLOBAL_RESPONSES[blockingType].i18n}.title`);
+        }
+        return blockingType === 'other_block' || !blockingType
+          ? this.$t('page.blocking_page.regular_response') : blockingType;
+      },
+      async openGlobalResponseDialog(type: GlobalResponseType) {
+        if (this.globalResponseSaving) return;
+        const sequence = ++this.globalResponseLoadSequence;
+        this.globalResponseType = type;
+        this.globalResponseVisible = true;
+        this.globalResponseTab = 'edit';
+        this.globalResponseLoading = true;
+        this.globalResponseLoaded = false;
+        this.globalResponseLoadError = false;
+        this.globalResponseEdited = false;
+        this.builtinResponseHtml = '';
+        this.builtinLoadError = false;
+        this.globalResponseData = {
+          ...INITIAL_GLOBAL_RESPONSE_DATA,
+          blocking_page_name: String(this.getBlockingTypeLabel(type)),
+        };
+        this.loadGlobalResponseBuiltin(type, sequence);
+        try {
+          const hosts = await allhost();
+          if (sequence !== this.globalResponseLoadSequence || !this.globalResponseVisible) return;
+          if (hosts.code !== 0 || !Array.isArray(hosts.data)) throw new Error('Unable to load websites');
+          const globalHostCode = this.findGlobalHostCode(hosts.data);
+          if (!globalHostCode) throw new Error('Global website is unavailable');
+          this.globalHostCode = globalHostCode;
+          this.globalResponseData.host_code = globalHostCode;
+          const res = await wafBlockingPageListApi({
+            host_code: globalHostCode,
+            blocking_type: type,
+            pageIndex: 1,
+            pageSize: 1,
+          });
+          if (sequence !== this.globalResponseLoadSequence || !this.globalResponseVisible) return;
+          if (res.code !== 0 || !res.data || !(Array.isArray(res.data.list) || (res.data.list === null && res.data.total === 0))) {
+            throw new Error('Unable to load response');
+          }
+          const record = (res.data.list || [])[0];
+          if (record) {
+            if (!record.id || record.host_code !== globalHostCode || record.blocking_type !== type) {
+              throw new Error('Unexpected response record');
+            }
+            const savedContent = record.response_content || '';
+            this.globalResponseData = {
+              ...this.globalResponseData,
+              ...record,
+              // 已存内容为空时使用内置页面，保留编辑区的预填内容。
+              response_content: savedContent.trim() ? savedContent : this.globalResponseData.response_content,
+              response_header: record.response_header ?? '[]',
+            };
+          }
+          this.globalResponseLoaded = true;
+        } catch (e) {
+          if (sequence !== this.globalResponseLoadSequence || !this.globalResponseVisible) return;
+          this.globalResponseLoadError = true;
+        } finally {
+          if (sequence === this.globalResponseLoadSequence) this.globalResponseLoading = false;
+        }
+      },
+      async saveGlobalResponse() {
+        const data = this.globalResponseData;
+        if (!this.canSaveGlobalResponse || !data.host_code) return;
+        this.globalResponseSaving = true;
+        const custom = data.response_content.trim();
+        const builtin = this.builtinResponseHtml.trim();
+        const payload = {
+          ...data,
+          blocking_type: this.globalResponseType,
+          // 与内置页面一致或为空时，保存为使用内置页面。
+          response_content: custom && custom !== builtin ? data.response_content : '',
+          response_code: this.globalResponseConfig.responseCode,
+          attack_type: '',
+          content_priority: 'samwaf',
+        };
+        try {
+          const res = await (payload.id ? wafBlockingPageEditApi(payload) : wafBlockingPageAddApi(payload));
+          if (res.code !== 0) {
+            this.$message.warning(res.msg || this.$t('page.blocking_page.global_response.save_failed'));
+            return;
+          }
+          this.$message.success(res.msg);
+          this.globalResponseVisible = false;
+          this.pagination.current = 1;
+          this.getList('');
+        } catch (e) {
+          this.$message.warning(this.$t('page.blocking_page.global_response.save_failed'));
+        } finally {
+          this.globalResponseSaving = false;
+        }
+      },
+      // 预览使用演示数据，替换占位符后再净化 HTML。
+      buildPreviewHtml(content: string, demo: Record<string, string> = {
+        ...PREVIEW_PLACEHOLDER_VALUES,
+        SAMWAF_BLOCK_INFO: String(this.$t('page.blocking_page.preview_demo_block_info')),
+      }) {
         if (!content) {
           return '';
         }
-        const demo = {
-          ...PREVIEW_PLACEHOLDER_VALUES,
-          SAMWAF_BLOCK_INFO: this.$t('page.blocking_page.preview_demo_block_info'),
-        };
-        return content.replace(/\[\[\s*\.?([A-Za-z0-9_]+)\s*\]\]/g, (match, key) =>
+        return purifyHtml(content.replace(/\[\[\s*\.([A-Za-z0-9_]+)\s*\]\]/g, (match, key) =>
           Object.prototype.hasOwnProperty.call(demo, key) ? demo[key] : match,
-        );
+        ));
       },
       getContentPriorityLabel(contentPriority) {
         const option = this.content_priority_options.find(opt => opt.value === (contentPriority || 'samwaf'));
@@ -498,6 +718,7 @@
               console.log(resdata);
               if (resdata.code === 0) {
                 let host_options = resdata.data;
+                this.globalHostCode = this.findGlobalHostCode(host_options);
                 for (let i = 0; i < host_options.length; i++) {
                   this.host_dic[host_options[i].value] = host_options[i].label;
                 }
@@ -556,6 +777,11 @@
       rehandleChange(changeParams, triggerAndData) {
       },
       handleClickEdit(e) {
+        const type = e.row.blocking_type;
+        if (isGlobalResponseType(type)) {
+          this.openGlobalResponseDialog(type);
+          return;
+        }
         console.log(e)
         const {
           id,response_header
@@ -757,9 +983,28 @@
     }
   }
 
+  .global-response-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    margin-top: 16px;
+
+    .t-button + .t-button {
+      margin-left: 0;
+    }
+  }
+
   .preview-frame {
     width: 100%;
     height: 320px;
+    border: 1px solid var(--td-component-border);
+    border-radius: var(--td-radius-default);
+    background-color: #fff;
+  }
+
+  .global-response-preview-frame {
+    width: 100%;
+    height: 440px;
     border: 1px solid var(--td-component-border);
     border-radius: var(--td-radius-default);
     background-color: #fff;

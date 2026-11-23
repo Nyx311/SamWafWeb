@@ -8,11 +8,51 @@ import { ensureSecSession, currentKeyId, secEncrypt, secDecrypt, isSecPayload, r
 import { clearLocalStorageExceptPreserved,saveCurrentUrl } from '@/constants';
 import { getRequestTimeout, DEFAULT_REQUEST_TIMEOUT } from '@/config/requestTimeout';
 import { NotifyPlugin, DialogPlugin, MessagePlugin } from 'tdesign-vue';
+import { pushLocalNotice, resetLocalNoticeOnLogout } from './localnotice';
+
+// 扩展 axios 配置：请求失败要不要弹提示由这两个标记（连同请求方法）决定，
+// 见 SamWafTechDoc/开发规则规范/2026-08-28-前端全局提示与铃铛消息.md
+declare module 'axios' {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
+  interface AxiosRequestConfig {
+    /** 强制当作后台请求：失败只进小铃铛，不弹通知 */
+    background?: boolean;
+    /** 强制当作前台请求：失败照常弹通知（GET 默认不弹时用它覆盖） */
+    foreground?: boolean;
+  }
+}
 
 // 连接失败(网络/跨域)提示：每次页面加载最多提示一次，避免刷屏
 let netErrNotified = false;
-// 请求超时提示的节流时间戳：并发超时时 3 秒内只提示一次，避免刷屏
+
+// 页面自动发起的请求（轮询、进页面就跑的检查）失败时不弹通知，只进小铃铛：
+// 无外网环境下这类请求会持续失败，弹出来就是一条条把右侧堆满。
+// 用户亲手点出来的请求仍然弹，但改为 10 秒自动消失，并按同一窗口节流，
+// 保证屏幕上最多只有一条。原先是 duration:0(永不消失) + 3 秒节流，
+// 拦不住 5 秒一次的轮询。
+const TIMEOUT_NOTIFY_DURATION = 10000;
+// 「无法连接后端」信息量更大（带解决办法入口），给长一点，但同样会自己消失
+const NETERR_NOTIFY_DURATION = 15000;
+// 连续超时的计数窗口：超过这个间隔没再超时就重新从 1 数起
+const TIMEOUT_COUNT_WINDOW = 60000;
 let lastTimeoutNotifyAt = 0;
+let lastTimeoutAt = 0;
+let timeoutCount = 0;
+
+// 判断一个失败要不要弹出来打扰用户。
+//
+// 全站有几百个请求，靠逐个打 background 标记必然漏（页面 mounted 里的列表加载最典型），
+// 所以改成按语义给默认值：
+//   GET / HEAD  —— 读取展示类，失败了页面自己会是空状态，弹卡片只会糊屏 → 只进铃铛
+//   POST 等写操作 —— 用户提交了东西，必须让他知道没成功 → 弹
+// 需要反过来的地方用 background / foreground 显式覆盖。
+function isBackgroundRequest(cfg: any): boolean {
+  if (!cfg) return true;
+  if (cfg.background === true) return true;
+  if (cfg.foreground === true) return false;
+  const method = String(cfg.method || 'get').toLowerCase();
+  return method === 'get' || method === 'head';
+}
 
 // 弹出"解决办法"详情对话框（内容较长，用对话框保证完整可读，不被通知截断）
 function showNetErrDetail(origin: string) {
@@ -74,8 +114,13 @@ const CODE = {
   AUTH_FAILURE: -999,
   NEED_BIND_2FA: -3,
   NEED_CHANGE_PWD: -4,
-  NEED_REHANDSHAKE: -5
+  NEED_REHANDSHAKE: -5,
+  // 后端存储本次不可用：登录状态没问题，保留登录态稍后重试，不能当鉴权失败处理
+  BACKEND_UNAVAILABLE: -6
 };
+
+// 首屏会并发十来个请求，后端不可用时会一起回来，同类提示只留一条
+let lastBackendUnavailableAt = 0;
 
 const instance = axios.create({
   baseURL: API_HOST,
@@ -180,6 +225,10 @@ instance.interceptors.response.use(
           // 保存当前访问的URL
           saveCurrentUrl();
           clearLocalStorageExceptPreserved();
+          // 并发请求会一起返回「令牌过期」，人已经被踢回登录页，这些回声没有信息量：
+          // 清掉已投递的本地提示，并在短窗口内丢弃后到的同类（见 messageguard）。
+          // 但「为什么被踢出来」要留一条，由登录页在表单上方显示一次。
+          resetLocalNoticeOnLogout('auth');
 
           console.log("鉴权失败")
           router.replace({ path: '/login' })
@@ -188,10 +237,20 @@ instance.interceptors.response.use(
           console.log("需要2Fa强制绑定")
           router.replace({ path: '/account/OTP' })
         }
+        else if (data.code === CODE.BACKEND_UNAVAILABLE) {
+          // 登录态不受影响：不保存返回地址、不清本地存储、不跳登录页
+          const now = Date.now();
+          if (now - lastBackendUnavailableAt > 3000) {
+            lastBackendUnavailableAt = now;
+            MessagePlugin.warning(data.msg || '服务暂时不可用，请稍后重试');
+          }
+          console.log("后端存储暂时不可用")
+        }
         else if (data.code === CODE.NEED_CHANGE_PWD) {
           // 服务端强制改密门：令牌未改密即访问其他接口时触发，引导回登录重新进入强制改密流程
           saveCurrentUrl();
           clearLocalStorageExceptPreserved();
+          resetLocalNoticeOnLogout();
           console.log("需要强制修改初始/重置密码")
           router.replace({ path: '/login' })
         }
@@ -200,6 +259,7 @@ instance.interceptors.response.use(
     }
   },
   (err) => {
+    if (axios.isCancel(err)) return Promise.reject(err);
     // 超时：后端“可达但响应过慢”（或网络慢），并非连不上/跨域。axios 超时表现为 code=ECONNABORTED 且无 response，
     // 若不单独处理会落入下面的「无法连接后端(CORS)」分支造成误导。这里单独提示（含超时秒数）并提供“重试”。
     const isTimeout =
@@ -208,13 +268,26 @@ instance.interceptors.response.use(
     if (isTimeout) {
       try {
         const seconds = Math.round((((err.config && err.config.timeout) || DEFAULT_REQUEST_TIMEOUT)) / 1000);
+        const cfg = err.config;
+        // 无论前台后台都在铃铛里留一条，用户手滑关掉通知后仍能回看
+        pushLocalNotice(`请求超时：${(cfg && cfg.url) || ''}（${seconds} 秒未响应）`);
+        // 后台请求到此为止，不弹通知
+        if (isBackgroundRequest(cfg)) {
+          return Promise.reject(err);
+        }
         const now = Date.now();
-        if (now - lastTimeoutNotifyAt > 3000) {
-          lastTimeoutNotifyAt = now;
-          const cfg = err.config;
+        timeoutCount = now - lastTimeoutAt > TIMEOUT_COUNT_WINDOW ? 1 : timeoutCount + 1;
+        lastTimeoutAt = now;
+        // 上一条通知还在屏幕上就不再弹，避免连点/并发请求堆成一列
+        if (now - lastTimeoutNotifyAt < TIMEOUT_NOTIFY_DURATION) {
+          return Promise.reject(err);
+        }
+        lastTimeoutNotifyAt = now;
+        const repeatTip = timeoutCount > 1 ? `（近期第 ${timeoutCount} 次）` : '';
+        {
           NotifyPlugin.warning({
             title: '请求超时',
-            content: `请求已超过 ${seconds} 秒未响应，后端可能繁忙或网络较慢，请重试。`,
+            content: `请求已超过 ${seconds} 秒未响应，后端可能繁忙或网络较慢，请重试。${repeatTip}`,
             footer: (h: any) => {
               const hasEmergency = !!getEmergencyPath();
               return h(
@@ -242,7 +315,7 @@ instance.interceptors.response.use(
                 ],
               );
             },
-            duration: 0,
+            duration: TIMEOUT_NOTIFY_DURATION,
             closeBtn: true,
           });
         }
@@ -254,6 +327,10 @@ instance.interceptors.response.use(
     // 注意：超时已在上方 return，不会走到这里，因此这里不会把“慢响应”误报成“连不上”。
     if (err.code === 'ERR_NETWORK' || !err.response || err.response.status === 0) {
       try {
+        pushLocalNotice(`无法连接后端：${(err.config && err.config.url) || ''}`);
+        if (isBackgroundRequest(err.config)) {
+          return Promise.reject(err);
+        }
         if (!netErrNotified) {
           netErrNotified = true;
           const origin = window.location.origin || '';
@@ -269,7 +346,7 @@ instance.interceptors.response.use(
                 },
                 '查看解决办法',
               ),
-            duration: 0,
+            duration: NETERR_NOTIFY_DURATION,
             closeBtn: true,
           });
         }

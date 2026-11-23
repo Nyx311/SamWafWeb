@@ -256,7 +256,8 @@ export default {
     },
     // 加载公告信息
     loadAnnouncements() {
-      GetAnnouncementApi({}).then(res => {
+      // 首页自动拉取，超时只进小铃铛
+      GetAnnouncementApi({}, { background: true }).then(res => {
         console.log("GetAnnouncementApi",res)
         if (res.code==0 && res.data.code=='success'){
            //将data字符串转换成json对象
@@ -321,7 +322,7 @@ export default {
           this.$router.push(item.link);
         } else {
           // 如果是外部链接，在新窗口打开
-          window.open(item.link, '_blank');
+          window.open(item.link, '_blank', 'noopener,noreferrer');
         }
       }
     }

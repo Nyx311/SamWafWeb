@@ -93,6 +93,16 @@
                   <a v-if="hit.source === 'threat_ip'" class="ipl-exclude-link" @click="openExclude(hit)">
                     {{ $t('common.ip_lookup.exclude_btn') }}
                   </a>
+                  <t-button
+                    v-if="hit.source === 'rule_ban'"
+                    theme="primary"
+                    variant="text"
+                    size="small"
+                    :loading="ruleBanRemoving"
+                    @click="confirmRemoveRuleBan"
+                  >
+                    {{ $t('common.ip_lookup.rule_ban_remove') }}
+                  </t-button>
                   <span class="ipl-effect">{{ effectText(hit.effect) }}</span>
                 </div>
                 <div v-if="hit.detail" class="ipl-detail">{{ hit.detail }}</div>
@@ -169,13 +179,6 @@
                       <t-option v-for="(name, code) in hostDic" :key="code" :value="code" :label="name" />
                     </t-select>
                   </t-form-item>
-                  <t-form-item v-if="isBlockMode" :label="$t('common.ip_lookup.block_layer')">
-                    <t-select v-model="allowForm.target_layer" :style="{ width: '100%' }">
-                      <t-option value="waf" :label="$t('common.ip_lookup.layer_waf')" />
-                      <t-option value="system" :label="$t('common.ip_lookup.layer_system')" />
-                      <t-option value="both" :label="$t('common.ip_lookup.layer_both')" />
-                    </t-select>
-                  </t-form-item>
                   <t-form-item :label="isBlockMode ? $t('common.ip_lookup.block_reason') : $t('common.ip_lookup.allow_reason')">
                     <t-textarea
                       v-model="allowForm.remarks"
@@ -220,6 +223,7 @@ import { wafIPWhiteAddApi } from '@/apis/ipwhite';
 import { wafIPBlockAddApi } from '@/apis/ipblock';
 import { allhost } from '@/apis/host';
 import { wafThreatIPExcludeAddApi } from '@/apis/threatip';
+import { wafRuleBanRemoveBanIpApi } from '@/apis/rule_ban';
 
 // 全局站点在库里就是一条 host="全局网站"、port=0 的普通记录，code 是 uuid。
 // 全站其它页面(anticc / host / SpiderActive)也是按这个字面量认的，保持一致。
@@ -259,10 +263,11 @@ export default Vue.extend({
       // '' = 只显示按钮；'allow'/'block' = 展开对应表单
       actionMode: '',
       allowLoading: false,
-      allowForm: { host_code: '', remarks: '', target_layer: 'waf' },
+      allowForm: { host_code: '', remarks: '' },
       // null = 收起；对象 = 展开威胁情报误报排除表单
       excludeForm: null,
       excludeSaving: false,
+      ruleBanRemoving: false,
     };
   },
   computed: {
@@ -270,8 +275,8 @@ export default Vue.extend({
     // 威胁情报要编译十万条的大集合，放一批里会被拖死
     groups() {
       return [
-        { key: 'list', label: this.$t('common.ip_lookup.step_list'), sources: ['ip_white', 'ip_black', 'ip_group'] },
-        { key: 'ban', label: this.$t('common.ip_lookup.step_ban'), sources: ['ip_failure', 'cc_ban', 'firewall'] },
+        { key: 'list', label: this.$t('common.ip_lookup.step_list'), sources: ['ip_white', 'ip_black', 'ip_group', 'log_exclude'] },
+        { key: 'ban', label: this.$t('common.ip_lookup.step_ban'), sources: ['ip_failure', 'cc_ban', 'rule_ban', 'firewall'] },
         { key: 'threat', label: this.$t('common.ip_lookup.step_threat'), sources: ['threat_ip'] },
         { key: 'cdn', label: this.$t('common.ip_lookup.step_cdn'), sources: ['cdn'] },
       ];
@@ -400,9 +405,40 @@ export default Vue.extend({
         }, 600);
       });
     },
+    confirmRemoveRuleBan() {
+      if (this.ruleBanRemoving) return;
+      const ip = this.result.ip;
+      const dialog = this.$dialog.confirm({
+        header: this.$t('common.ip_lookup.rule_ban_remove'),
+        body: this.$t('common.ip_lookup.rule_ban_remove_confirm', { ip }),
+        zIndex: this.zIndex + 1,
+        onConfirm: () => {
+          if (this.ruleBanRemoving) return;
+          this.ruleBanRemoving = true;
+          return wafRuleBanRemoveBanIpApi({ ip })
+            .then((res) => {
+              if (res.code === 0) {
+                this.$message.success(res.msg);
+                dialog.destroy();
+                if (this.visible && this.result.ip === ip) this.doQuery();
+              } else {
+                this.$message.error(res.msg);
+              }
+            })
+            .catch(() => {
+              this.$message.error(this.$t('common.ip_lookup.rule_ban_remove_failed'));
+            })
+            .finally(() => {
+              this.ruleBanRemoving = false;
+            });
+        },
+      });
+    },
     effectTheme(effect) {
       if (effect === 'allow') return 'success';
       if (effect === 'block') return 'danger';
+      // 日志排除既不放行也不拦截，只是「不记日志」，用中性色区别于封禁类
+      if (effect === 'log_skip') return 'default';
       return 'warning';
     },
     // 打开威胁情报误报排除表单。
@@ -441,6 +477,7 @@ export default Vue.extend({
     effectText(effect) {
       if (effect === 'allow') return this.$t('common.ip_lookup.effect_allow');
       if (effect === 'block') return this.$t('common.ip_lookup.effect_block');
+      if (effect === 'log_skip') return this.$t('common.ip_lookup.effect_log_skip');
       return this.$t('common.ip_lookup.effect_none');
     },
     sourceName(code) {
@@ -451,7 +488,6 @@ export default Vue.extend({
       this.allowForm = {
         host_code: this.globalHostCode,
         remarks: this.buildReason(mode),
-        target_layer: 'waf',
       };
       this.loadHostDic();
     },
@@ -505,6 +541,7 @@ export default Vue.extend({
       }
 
       const block = this.isBlockMode;
+      // 黑名单已统一为纯 WAF 层，不再下发 target_layer
       const payload = {
         host_code: this.allowForm.host_code,
         ip: this.result.ip,
@@ -512,7 +549,6 @@ export default Vue.extend({
         ip_type: 'ip',
         group_code: '',
       };
-      if (block) payload.target_layer = this.allowForm.target_layer;
 
       this.allowLoading = true;
       (block ? wafIPBlockAddApi(payload) : wafIPWhiteAddApi(payload))

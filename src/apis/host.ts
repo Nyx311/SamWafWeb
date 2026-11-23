@@ -113,3 +113,32 @@ export function clearIpSourceProbe(params) {
     params: params
   })
 }
+
+export function testHostHealth(data, timeout: number, signal?: AbortSignal) {
+  return request({
+    url: 'wafhost/host/health/test',
+    method: 'post',
+    data,
+    timeout,
+    signal,
+    background: true
+  })
+}
+
+//保存前预检端口监听表(issue #955)
+export function checkHostPorts(data) {
+  return request({
+    url: 'wafhost/host/checkports',
+    method: 'post',
+    data: data
+  })
+}
+
+//端口占用总览
+export function getPortOverview(params) {
+  return request({
+    url: 'wafhost/port/overview',
+    method: 'get',
+    params: params
+  })
+}

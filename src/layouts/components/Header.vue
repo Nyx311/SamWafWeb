@@ -6,7 +6,7 @@
       <template #confirmBtn>
         <!-- 容器环境：应用内升级会在容器重建后回退，这里不给"确认更新"，只给文档入口 -->
         <t-link v-if="!self_update_allowed" theme="primary" underline
-                href="https://doc.samwaf.com/quickstart/Update.html" target="_blank">
+                href="https://doc.samwaf.com/quickstart/Update.html" target="_blank" rel="noopener noreferrer">
           {{$t('topNav.update.container_doc_link')}}
         </t-link>
         <t-button v-else :theme="update_new_ver && update_new_ver.toLowerCase().includes('beta') ? 'danger' : 'warning'" @click="handleConfirmUpdate">
@@ -42,13 +42,16 @@ docker compose up -d</pre>
         <div>
           <t-link theme="primary"
           underline href="https://doc.samwaf.com/quickstart/Update.html"
-           target="black">{{ $t('topNav.update.more_label') }}</t-link>
+           target="_blank" rel="noopener noreferrer">{{ $t('topNav.update.more_label') }}</t-link>
 
         </div>
       </div>
 
     </t-dialog>
-    
+
+    <!-- 升级进度：弹窗内联展示 + 后台运行悬浮球，独立于上面的"有新版本"弹窗存活 -->
+    <update-progress ref="updateProgress" @retry="handleDoUpdate" @open-rollback="openRollbackDialog" />
+
     <!-- 版本回退对话框 -->
     <t-dialog width="680px" :visible.sync="rollback_visible" header="版本回退" :confirm-btn="null" :cancel-btn="null">
       <t-alert theme="warning" style="margin-bottom:16px">
@@ -239,6 +242,7 @@ docker compose up -d</pre>
   import Search from './Search.vue';
   import MenuContent from './MenuContent.vue';
   import SystemMonitor from './SystemMonitor.vue';
+  import UpdateProgress from './UpdateProgress.vue';
   import ChangePasswordDialog from '@/pages/waf/account/components/ChangePasswordDialog.vue';
   import {logoutapi} from '@/apis/login'
   export default Vue.extend({
@@ -248,6 +252,7 @@ docker compose up -d</pre>
       Notice,
       Search,
       SystemMonitor,
+      UpdateProgress,
       ChangePasswordDialog,
       ViewListIcon,
       LogoGithubIcon,
@@ -375,6 +380,8 @@ docker compose up -d</pre>
       // 首次提示，每隔24小时 进行弹窗 ，其余实际不弹窗
       this.checkVersion("auto")
       this.init()
+      // 升级中刷新了页面：把进度捡回来，别让用户以为升级断了
+      this.$nextTick(() => { (this.$refs.updateProgress as any)?.resume() })
     },
     methods: {
       // 切换语言
@@ -418,7 +425,7 @@ docker compose up -d</pre>
         this.$router.push(url);
       },
       navToHelper() {
-        window.open(this.samwafglobalconfig.getOnlineUrl());
+        window.open(this.samwafglobalconfig.getOnlineUrl(), '_blank', 'noopener,noreferrer');
       },
       resetServer() {
         let that = this
@@ -452,7 +459,8 @@ docker compose up -d</pre>
       },
       checkVersion(method){
           let that = this;
-          CheckVersionApi().then((res) => {
+          // auto 是进入页面时自动跑的：超时只进小铃铛，不弹右上角通知
+          CheckVersionApi(undefined, method === 'manual' ? undefined : { background: true }).then((res) => {
             let resdata = res
             console.log(resdata)
             if (resdata.code === 0) {
@@ -541,7 +549,7 @@ docker compose up -d</pre>
         if (!this.rollback_selected) return;
         const that = this;
         const target = this.rollback_selected;
-        this.$dialog.confirm({
+        const confirmDia = this.$dialog.confirm({
           header: '确认回退版本',
           body: `确定将程序回退到版本 ${target.version}？\n回退后服务将自动重启，请耐心等待。`,
           confirmBtn: { theme: 'danger', content: '确认回退' },
@@ -549,12 +557,15 @@ docker compose up -d</pre>
             that.isRollbackLoading = true;
             DoRollbackApi({ version: target.version }).then((res: any) => {
               if (res.code === 0) {
+                confirmDia.destroy();
                 that.$message.success(res.msg || '已发起回退，等待重启通知');
                 that.rollback_visible = false;
               } else {
+                confirmDia.hide();
                 that.$message.warning(res.msg || '回退失败');
               }
             }).catch(() => {
+              confirmDia.hide();
               that.$message.warning('回退请求失败');
             }).finally(() => {
               that.isRollbackLoading = false;
@@ -580,9 +591,10 @@ docker compose up -d</pre>
             let resdata = res
             console.log(resdata)
             if (resdata.code === 0) {
-              that.$message.success(resdata.msg);
+              // 弹窗不再一关了之：换成进度面板，用户能看见跑到哪一步
               that.update_visible = false
-
+              that.isUpdateloading = false;
+              (that.$refs.updateProgress as any)?.start()
             }else{
               that.$message.warning(resdata.msg);
                // 升级失败，关闭加载并显示错误信息

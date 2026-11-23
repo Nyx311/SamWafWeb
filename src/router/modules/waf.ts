@@ -20,6 +20,12 @@ export default [
 
       },
       {
+        path: 'website-diagnostic',
+        name: 'WebsiteDiagnostic',
+        component: () => import('@/pages/waf/host/diagnostic.vue'),
+        meta: { title: 'page.host.diagnostic.title', hidden: true, keepAlive: false, roleCode: 'WafHost' },
+      },
+      {
         path: 'wafrule',
         name: 'WafRule',
         component: () => import('@/pages/waf/rule/index.vue'),
@@ -116,12 +122,24 @@ export default [
         name: 'WafBlockingPagelist',
         component: () => import('@/pages/waf/bLocking_page/index.vue'),
         meta: { title: 'menu.host.blocking_page' },
-      },       {
+      },
+      {
+        path: 'wafIPBan',
+        name: 'WafIPBan',
+        component: () => import('@/pages/waf/ip_ban/index.vue'),
+        meta: { title: 'menu.host.ip_ban', keepAlive: false },
+      },
+      {
         path: 'wafIPFailure',
         name: 'WafIPFailure',
-        component: () => import('@/pages/waf/ip_failure/index.vue'),
-        meta: { title: 'menu.host.ip_failure' },
-
+        redirect: to => ({ name: 'WafIPBan', query: { ...to.query, source: 'failure' }, hash: to.hash }),
+        meta: { title: 'menu.host.ip_ban', hidden: true },
+      },
+      {
+        path: 'wafRuleBan',
+        name: 'WafRuleBan',
+        redirect: to => ({ name: 'WafIPBan', query: { ...to.query, source: 'rule' }, hash: to.hash }),
+        meta: { title: 'menu.host.ip_ban', hidden: true },
       },
       {
         path: 'wafFirewallIPBlock',
@@ -170,6 +188,12 @@ export default [
         name: 'WafAnalysisSpiderLog',
         component: () => import('@/pages/waf/analysis/SpiderActive.vue'),
         meta: { title: 'menu.analysis.analysis_spider_title' },
+      },
+      {
+        path: 'wafanalysissourcepath',
+        name: 'WafAnalysisSourcePath',
+        component: () => import('@/pages/waf/analysis/SourcePath.vue'),
+        meta: { title: 'menu.analysis.analysis_source_path_title' },
       },
     ],
   },
@@ -369,6 +393,12 @@ export default [
         name: 'PrivateInfo',
         component: () => import('@/pages/waf/private_info/index.vue'),
         meta: { title: 'menu.system.private_info_title' },
+      },
+      {
+        path: 'SecurityReport',
+        name: 'SecurityReport',
+        component: () => import('@/pages/waf/security_report/index.vue'),
+        meta: { title: 'securityReport.title', keepAlive: false },
       },
       {
         path: 'DataRetention',
